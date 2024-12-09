@@ -1,15 +1,41 @@
+data "aws_ssm_parameter" "github_app_id" {
+  name = "/truxinc/gha-runner/app/github_app_id"
+}
+
+data "aws_ssm_parameter" "github_app_key_base64" {
+  name = "/truxinc/gha-runner/app/github_app_key_base64"
+}
+
+data "aws_ssm_parameter" "github_app_webhook_secret" {
+  name = "/truxinc/gha-runner/app/github_app_webhook_secret"
+}
+
+data "aws_ssm_parameter" "vpc_id" {
+  name = "/truxinc/gha-runner/vpc_id"
+  
+}
+
+data "aws_ssm_parameter" "subnet1_id" {
+  name = "/truxinc/gha-runner/subnet1_id"
+}
+
+data "aws_ssm_parameter" "subnet2_id" {
+  name = "/truxinc/gha-runner/subnet2_id"
+}
+
 locals {
   tags = merge(var.tags, {
     "ghr:environment" = var.prefix
   })
 
   github_app_parameters = {
-    id         = module.ssm.parameters.github_app_id
-    key_base64 = module.ssm.parameters.github_app_key_base64
+    id         = data.aws_ssm_parameter.github_app_id
+    key_base64 = data.aws_ssm_parameter.github_app_key_base64
   }
 
   default_runner_labels = distinct(concat(["self-hosted", var.runner_os, var.runner_architecture]))
   runner_labels         = (var.runner_disable_default_labels == false) ? sort(concat(local.default_runner_labels, var.runner_extra_labels)) : var.runner_extra_labels
+  subnet_ids = ["${data.aws_ssm_parameter.subnet1_id.insecure_value}", "${data.aws_ssm_parameter.subnet2_id.insecure_value}"]
 
   ssm_root_path = var.ssm_paths.use_prefix ? "/${var.ssm_paths.root}/${var.prefix}" : "/${var.ssm_paths.root}"
 }
@@ -89,15 +115,6 @@ resource "aws_sqs_queue" "queued_builds_dlq" {
   tags                              = var.tags
 }
 
-module "ssm" {
-  source = "./modules/ssm"
-
-  kms_key_arn = var.kms_key_arn
-  path_prefix = "${local.ssm_root_path}/${var.ssm_paths.app}"
-  github_app  = var.github_app
-  tags        = local.tags
-}
-
 module "webhook" {
   source = "./modules/webhook"
 
@@ -124,7 +141,7 @@ module "webhook" {
   matcher_config_parameter_store_tier = var.matcher_config_parameter_store_tier
 
   github_app_parameters = {
-    webhook_secret = module.ssm.parameters.github_app_webhook_secret
+    webhook_secret = data.aws_ssm_parameter.github_app_webhook_secret
   }
 
   lambda_s3_bucket                              = var.lambda_s3_bucket
@@ -157,8 +174,8 @@ module "runners" {
 
   aws_region    = var.aws_region
   aws_partition = var.aws_partition
-  vpc_id        = var.vpc_id
-  subnet_ids    = var.subnet_ids
+  vpc_id        = data.aws_ssm_parameter.vpc_id.insecure_value
+  subnet_ids    = local.subnet_ids
   prefix        = var.prefix
   tags          = local.tags
 

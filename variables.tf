@@ -3,16 +3,6 @@ variable "aws_region" {
   type        = string
 }
 
-variable "vpc_id" {
-  description = "The VPC for security groups of the action runners."
-  type        = string
-}
-
-variable "subnet_ids" {
-  description = "List of subnets in which the action runner instances will be launched. The subnets need to exist in the configured VPC (`vpc_id`), and must reside in different availability zones (see https://github.com/philips-labs/terraform-aws-github-runner/issues/2904)"
-  type        = list(string)
-}
-
 variable "tags" {
   description = "Map of tags that will be added to created resources. By default resources will be tagged with name and environment."
   type        = map(string)
@@ -29,15 +19,6 @@ variable "enable_organization_runners" {
   description = "Register runners to organization, instead of repo level"
   type        = bool
   default     = false
-}
-
-variable "github_app" {
-  description = "GitHub app parameters, see your github app. Ensure the key is the base64-encoded `.pem` file (the output of `base64 app.private-key.pem`, not the content of `private-key.pem`)."
-  type = object({
-    key_base64     = string
-    id             = string
-    webhook_secret = string
-  })
 }
 
 variable "scale_down_schedule_expression" {
