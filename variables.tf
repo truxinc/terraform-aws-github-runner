@@ -58,10 +58,21 @@ variable "runner_boot_time_in_minutes" {
   default     = 5
 }
 
+variable "runner_disable_default_labels" {
+  description = "Disable default labels for the runners (os, architecture and `self-hosted`). If enabled, the runner will only have the extra labels provided in `runner_extra_labels`. In case you on own start script is used, this configuration parameter needs to be parsed via SSM."
+  type        = bool
+  default     = false
+}
+
 variable "runner_extra_labels" {
-  description = "Extra (custom) labels for the runners (GitHub). Labels checks on the webhook can be enforced by setting `enable_runner_workflow_job_labels_check_all`. GitHub read-only labels should not be provided."
+  description = "Extra (custom) labels for the runners (GitHub). Separate each label by a comma. Labels checks on the webhook can be enforced by setting `enable_workflow_job_labels_check`. GitHub read-only labels should not be provided."
   type        = list(string)
   default     = []
+
+  validation {
+    condition     = var.runner_extra_labels != null
+    error_message = "Extra labels should not be null."
+  }
 }
 
 variable "runner_group_name" {
@@ -82,6 +93,12 @@ variable "webhook_lambda_zip" {
   default     = null
 }
 
+variable "webhook_lambda_memory_size" {
+  description = "Memory size limit in MB for webhook lambda in."
+  type        = number
+  default     = 256
+}
+
 variable "webhook_lambda_timeout" {
   description = "Time out of the webhook lambda in seconds."
   type        = number
@@ -94,10 +111,22 @@ variable "runners_lambda_zip" {
   default     = null
 }
 
+variable "runners_scale_up_lambda_memory_size" {
+  description = "Memory size limit in MB for scale-up lambda."
+  type        = number
+  default     = 512
+}
+
 variable "runners_scale_up_lambda_timeout" {
   description = "Time out for the scale up lambda in seconds."
   type        = number
   default     = 30
+}
+
+variable "runners_scale_down_lambda_memory_size" {
+  description = "Memory size limit in MB for scale-down lambda."
+  type        = number
+  default     = 512
 }
 
 variable "runners_scale_down_lambda_timeout" {
@@ -110,6 +139,12 @@ variable "runner_binaries_syncer_lambda_zip" {
   description = "File location of the binaries sync lambda zip file."
   type        = string
   default     = null
+}
+
+variable "runner_binaries_syncer_lambda_memory_size" {
+  description = "Memory size limit in MB for binary syncer lambda."
+  type        = number
+  default     = 256
 }
 
 variable "runner_binaries_syncer_lambda_timeout" {
@@ -222,7 +257,13 @@ variable "enable_userdata" {
 }
 
 variable "userdata_template" {
-  description = "Alternative user-data template, replacing the default template. By providing your own user_data you have to take care of installing all required software, including the action runner. Variables userdata_pre/post_install are ignored."
+  description = "Alternative user-data template file path, replacing the default template. By providing your own user_data you have to take care of installing all required software, including the action runner. Variables userdata_pre/post_install are ignored."
+  type        = string
+  default     = null
+}
+
+variable "userdata_content" {
+  description = "Alternative user-data content, replacing the templated one. By providing your own user_data you have to take care of installing all required software, including the action runner and registering the runner.  Be-aware configuration paramaters in SSM as well as tags are treated as internals. Changes will not trigger a breaking release."
   type        = string
   default     = null
 }
@@ -535,6 +576,15 @@ variable "enable_runner_workflow_job_labels_check_all" {
   default     = true
 }
 
+variable "matcher_config_parameter_store_tier" {
+  description = "The tier of the parameter store for the matcher configuration. Valid values are `Standard`, and `Advanced`."
+  type        = string
+  default     = "Standard"
+  validation {
+    condition     = contains(["Standard", "Advanced"], var.matcher_config_parameter_store_tier)
+    error_message = "`matcher_config_parameter_store_tier` value is not valid, valid values are: `Standard`, and `Advanced`."
+  }
+}
 variable "runner_ec2_tags" {
   description = "Map of tags that will be added to the launch template instance tag specifications."
   type        = map(string)
@@ -622,6 +672,12 @@ variable "runner_architecture" {
   }
 }
 
+variable "pool_lambda_memory_size" {
+  description = "Memory size limit for scale-up lambda."
+  type        = number
+  default     = 512
+}
+
 variable "pool_lambda_timeout" {
   description = "Time out for the pool lambda in seconds."
   type        = number
@@ -641,10 +697,11 @@ variable "pool_lambda_reserved_concurrent_executions" {
 }
 
 variable "pool_config" {
-  description = "The configuration for updating the pool. The `pool_size` to adjust to by the events triggered by the `schedule_expression`. For example you can configure a cron expression for weekdays to adjust the pool to 10 and another expression for the weekend to adjust the pool to 1."
+  description = "The configuration for updating the pool. The `pool_size` to adjust to by the events triggered by the `schedule_expression`. For example you can configure a cron expression for weekdays to adjust the pool to 10 and another expression for the weekend to adjust the pool to 1. Use `schedule_expression_timezone` to override the schedule time zone (defaults to UTC)."
   type = list(object({
-    schedule_expression = string
-    size                = number
+    schedule_expression          = string
+    schedule_expression_timezone = optional(string)
+    size                         = number
   }))
   default = []
 }
@@ -664,7 +721,7 @@ variable "disable_runner_autoupdate" {
 variable "lambda_runtime" {
   description = "AWS Lambda runtime."
   type        = string
-  default     = "nodejs18.x"
+  default     = "nodejs20.x"
 }
 
 variable "lambda_architecture" {
@@ -677,25 +734,6 @@ variable "lambda_architecture" {
   }
 }
 
-variable "enable_workflow_job_events_queue" {
-  description = "Enabling this experimental feature will create a secondory sqs queue to which a copy of the workflow_job event will be delivered."
-  type        = bool
-  default     = false
-}
-
-variable "workflow_job_queue_configuration" {
-  description = "Configuration options for workflow job queue which is only applicable if the flag enable_workflow_job_events_queue is set to true."
-  type = object({
-    delay_seconds              = number
-    visibility_timeout_seconds = number
-    message_retention_seconds  = number
-  })
-  default = {
-    "delay_seconds" : null,
-    "visibility_timeout_seconds" : null,
-    "message_retention_seconds" : null
-  }
-}
 variable "enable_runner_binaries_syncer" {
   description = "Option to disable the lambda to sync GitHub runner distribution, useful when using a pre-build AMI."
   type        = bool
@@ -743,6 +781,7 @@ variable "ssm_paths" {
     root       = optional(string, "github-action-runners")
     app        = optional(string, "app")
     runners    = optional(string, "runners")
+    webhook    = optional(string, "webhook")
     use_prefix = optional(bool, true)
   })
   default = {}
@@ -797,12 +836,14 @@ variable "runners_ssm_housekeeper" {
 
   `schedule_expression`: is used to configure the schedule for the lambda.
   `enabled`: enable or disable the lambda trigger via the EventBridge.
+  `lambda_memory_size`: lambda memery size limit.
   `lambda_timeout`: timeout for the lambda in seconds.
   `config`: configuration for the lambda function. Token path will be read by default from the module.
   EOF
   type = object({
     schedule_expression = optional(string, "rate(1 day)")
     enabled             = optional(bool, true)
+    lambda_memory_size  = optional(number, 512)
     lambda_timeout      = optional(number, 60)
     config = object({
       tokenPath      = optional(string)
@@ -811,4 +852,102 @@ variable "runners_ssm_housekeeper" {
     })
   })
   default = { config = {} }
+}
+
+variable "metrics" {
+  description = "Configuration for metrics created by the module, by default disabled to avoid additional costs. When metrics are enable all metrics are created unless explicit configured otherwise."
+  type = object({
+    enable    = optional(bool, false)
+    namespace = optional(string, "GitHub Runners")
+    metric = optional(object({
+      enable_github_app_rate_limit    = optional(bool, true)
+      enable_job_retry                = optional(bool, true)
+      enable_spot_termination_warning = optional(bool, true)
+    }), {})
+  })
+  default = {}
+}
+
+variable "instance_termination_watcher" {
+  description = <<-EOF
+    Configuration for the instance termination watcher. This feature is Beta, changes will not trigger a major release as long in beta.
+
+    `enable`: Enable or disable the spot termination watcher.
+    'features': Enable or disable features of the termination watcher.
+    `memory_size`: Memory size linit in MB of the lambda.
+    `s3_key`: S3 key for syncer lambda function. Required if using S3 bucket to specify lambdas.
+    `s3_object_version`: S3 object version for syncer lambda function. Useful if S3 versioning is enabled on source bucket.
+    `timeout`: Time out of the lambda in seconds.
+    `zip`: File location of the lambda zip file.
+  EOF
+
+  type = object({
+    enable        = optional(bool, false)
+    enable_metric = optional(string, null) # deprectaed
+    features = optional(object({
+      enable_spot_termination_handler              = optional(bool, true)
+      enable_spot_termination_notification_watcher = optional(bool, true)
+    }), {})
+    memory_size       = optional(number, null)
+    s3_key            = optional(string, null)
+    s3_object_version = optional(string, null)
+    timeout           = optional(number, null)
+    zip               = optional(string, null)
+  })
+  default = {}
+
+  validation {
+    condition     = var.instance_termination_watcher.enable_metric == null
+    error_message = "The variable `instance_termination_watcher.enable_metric` is deprecated, use `metrics` instead."
+  }
+}
+
+variable "runners_ebs_optimized" {
+  description = "Enable EBS optimization for the runner instances."
+  type        = bool
+  default     = false
+}
+
+variable "lambda_tags" {
+  description = "Map of tags that will be added to all the lambda function resources. Note these are additional tags to the default tags."
+  type        = map(string)
+  default     = {}
+}
+
+variable "job_retry" {
+  description = <<-EOF
+    Experimental! Can be removed / changed without trigger a major release.Configure job retries. The configuration enables job retries (for ephemeral runners). After creating the insances a message will be published to a job retry queue. The job retry check lambda is checking after a delay if the job is queued. If not the message will be published again on the scale-up (build queue). Using this feature can impact the reate limit of the GitHub app.
+
+    `enable`: Enable or disable the job retry feature.
+    `delay_in_seconds`: The delay in seconds before the job retry check lambda will check the job status.
+    `delay_backoff`: The backoff factor for the delay.
+    `lambda_memory_size`: Memory size limit in MB for the job retry check lambda.
+    `lambda_timeout`: Time out of the job retry check lambda in seconds.
+    `max_attempts`: The maximum number of attempts to retry the job.
+  EOF
+
+  type = object({
+    enable             = optional(bool, false)
+    delay_in_seconds   = optional(number, 300)
+    delay_backoff      = optional(number, 2)
+    lambda_memory_size = optional(number, 256)
+    lambda_timeout     = optional(number, 30)
+    max_attempts       = optional(number, 1)
+  })
+  default = {}
+}
+
+variable "eventbridge" {
+  description = <<EOF
+    Enable the use of EventBridge by the module. By enabling this feature events will be put on the EventBridge by the webhook instead of directly dispatching to queues for scaling.
+
+    `enable`: Enable the EventBridge feature.
+    `accept_events`: List can be used to only allow specific events to be putted on the EventBridge. By default all events, empty list will be be interpreted as all events.
+EOF
+  type = object({
+    enable        = optional(bool, false)
+    accept_events = optional(list(string), null)
+  })
+
+  default = {}
 }

@@ -74,6 +74,12 @@ variable "lambda_timeout" {
   default     = 300
 }
 
+variable "lambda_memory_size" {
+  description = "Memory size of the lambda."
+  type        = number
+  default     = 256
+}
+
 variable "role_permissions_boundary" {
   description = "Permissions boundary that will be added to the created role for the lambda."
   type        = string
@@ -208,7 +214,7 @@ variable "lambda_principals" {
 variable "lambda_runtime" {
   description = "AWS Lambda runtime."
   type        = string
-  default     = "nodejs18.x"
+  default     = "nodejs20.x"
 }
 
 variable "lambda_architecture" {
@@ -229,4 +235,10 @@ variable "tracing_config" {
     capture_error         = optional(bool, false)
   })
   default = {}
+}
+
+variable "lambda_tags" {
+  description = "Map of tags that will be added to all the lambda function resources. Note these are additional tags to the default tags."
+  type        = map(string)
+  default     = {}
 }

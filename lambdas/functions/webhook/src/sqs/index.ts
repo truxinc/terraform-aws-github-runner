@@ -1,7 +1,6 @@
 import { SQS, SendMessageCommandInput } from '@aws-sdk/client-sqs';
 import { WorkflowJobEvent } from '@octokit/webhooks-types';
-import { createChildLogger, getTracedAWSV3Client } from '@terraform-aws-github-runner/aws-powertools-util';
-import { Config } from '../ConfigResolver';
+import { createChildLogger, getTracedAWSV3Client } from '@aws-github-runner/aws-powertools-util';
 
 const logger = createChildLogger('sqs');
 
@@ -13,6 +12,7 @@ export interface ActionRequestMessage {
   installationId: number;
   queueId: string;
   queueFifo: boolean;
+  repoOwnerType: string;
 }
 
 export interface MatcherConfig {
@@ -20,9 +20,9 @@ export interface MatcherConfig {
   exactMatch: boolean;
 }
 
-export type RunnerConfig = QueueConfig[];
+export type RunnerConfig = RunnerMatcherConfig[];
 
-export interface QueueConfig {
+export interface RunnerMatcherConfig {
   matcherConfig: MatcherConfig;
   id: string;
   arn: string;
@@ -48,19 +48,3 @@ export const sendActionRequest = async (message: ActionRequestMessage): Promise<
 
   await sqs.sendMessage(sqsMessage);
 };
-
-export async function sendWebhookEventToWorkflowJobQueue(message: GithubWorkflowEvent, config: Config): Promise<void> {
-  if (config.workflowJobEventSecondaryQueue != undefined) {
-    const sqs = new SQS({ region: process.env.AWS_REGION });
-    const sqsMessage: SendMessageCommandInput = {
-      QueueUrl: String(config.workflowJobEventSecondaryQueue),
-      MessageBody: JSON.stringify(message),
-    };
-    logger.debug(`Sending Webhook events to the workflow job queue: ${config.workflowJobEventSecondaryQueue}`);
-    try {
-      await sqs.sendMessage(sqsMessage);
-    } catch (e) {
-      logger.warn(`Error in sending webhook events to workflow job queue: ${(e as Error).message}`);
-    }
-  }
-}
