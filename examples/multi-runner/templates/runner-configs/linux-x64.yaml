@@ -9,6 +9,8 @@ runner_config:
   runner_architecture: x64
   runner_name_prefix: amazon-x64_
   enable_ssm_on_runners: true
+  vpc_id: ${vpc_id}
+  subnet_ids: ${subnet_ids}
   instance_types:
     - m5ad.large
     - m5a.large
@@ -23,3 +25,7 @@ runner_config:
     http_endpoint: enabled
     http_tokens: optional
     http_put_response_hop_limit: 1
+  job_retry:
+    enable: true
+    max_attempts: 1
+    delay_in_seconds: 180

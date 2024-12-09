@@ -149,7 +149,13 @@ variable "enable_userdata" {
 }
 
 variable "userdata_template" {
-  description = "Alternative user-data template, replacing the default template. By providing your own user_data you have to take care of installing all required software, including the action runner. Variables userdata_pre/post_install are ignored."
+  description = "Alternative user-data template file path, replacing the default template. By providing your own user_data you have to take care of installing all required software, including the action runner. Variables userdata_pre/post_install are ignored."
+  type        = string
+  default     = null
+}
+
+variable "userdata_content" {
+  description = "Alternative user-data content, replacing the templated one. By providing your own user_data you have to take care of installing all required software, including the action runner and registering the runner.  Be-aware configuration paramaters in SSM as well as tags are treated as internals. Changes will not trigger a breaking release."
   type        = string
   default     = null
 }
@@ -170,6 +176,7 @@ variable "sqs_build_queue" {
   description = "SQS queue to consume accepted build events."
   type = object({
     arn = string
+    url = string
   })
 }
 
@@ -184,6 +191,12 @@ variable "github_app_parameters" {
     key_base64 = map(string)
     id         = map(string)
   })
+}
+
+variable "lambda_scale_down_memory_size" {
+  description = "Memory size limit in MB for scale down lambda."
+  type        = number
+  default     = 512
 }
 
 variable "scale_down_schedule_expression" {
@@ -202,6 +215,12 @@ variable "runner_boot_time_in_minutes" {
   description = "The minimum time for an EC2 runner to boot and register as a runner."
   type        = number
   default     = 5
+}
+
+variable "runner_disable_default_labels" {
+  description = "Disable default labels for the runners (os, architecture and `self-hosted`). If enabled, the runner will only have the extra labels provided in `runner_extra_labels`."
+  type        = bool
+  default     = false
 }
 
 variable "runner_labels" {
@@ -231,6 +250,12 @@ variable "scale_up_reserved_concurrent_executions" {
   description = "Amount of reserved concurrent executions for the scale-up lambda function. A value of 0 disables lambda from being triggered and -1 removes any concurrency limitations."
   type        = number
   default     = 1
+}
+
+variable "lambda_scale_up_memory_size" {
+  description = "Memory size limit in MB for scale-up lambda."
+  type        = number
+  default     = 512
 }
 
 variable "lambda_timeout_scale_up" {
@@ -270,7 +295,7 @@ variable "runner_run_as" {
 }
 
 variable "runners_maximum_count" {
-  description = "The maximum number of runners that will be created."
+  description = "The maximum number of runners that will be created. Setting the variable to `-1` desiables the maximum check."
   type        = number
   default     = 3
 }
@@ -501,6 +526,12 @@ variable "pool_lambda_timeout" {
   default     = 60
 }
 
+variable "pool_lambda_memory_size" {
+  description = "Lambda Memory size limit in MB for pool lambda"
+  type        = number
+  default     = 512
+}
+
 variable "pool_runner_owner" {
   description = "The pool will deploy runners to the GitHub org ID, set this value to the org to which you want the runners deployed. Repo level is not supported."
   type        = string
@@ -514,10 +545,11 @@ variable "pool_lambda_reserved_concurrent_executions" {
 }
 
 variable "pool_config" {
-  description = "The configuration for updating the pool. The `pool_size` to adjust to by the events triggered by the `schedule_expression`. For example you can configure a cron expression for week days to adjust the pool to 10 and another expression for the weekend to adjust the pool to 1."
+  description = "The configuration for updating the pool. The `pool_size` to adjust to by the events triggered by the `schedule_expression`. For example you can configure a cron expression for week days to adjust the pool to 10 and another expression for the weekend to adjust the pool to 1. Use `schedule_expression_timezone ` to override the schedule time zone (defaults to UTC)."
   type = list(object({
-    schedule_expression = string
-    size                = number
+    schedule_expression          = string
+    schedule_expression_timezone = optional(string)
+    size                         = number
   }))
   default = []
 }
@@ -531,7 +563,7 @@ variable "disable_runner_autoupdate" {
 variable "lambda_runtime" {
   description = "AWS Lambda runtime."
   type        = string
-  default     = "nodejs18.x"
+  default     = "nodejs20.x"
 }
 
 variable "lambda_architecture" {
@@ -556,7 +588,7 @@ variable "enable_user_data_debug_logging" {
 }
 
 variable "ssm_paths" {
-  description = "The root path used in SSM to store configuration and secreets."
+  description = "The root path used in SSM to store configuration and secrets."
   type = object({
     root   = string
     tokens = string
@@ -614,12 +646,14 @@ variable "ssm_housekeeper" {
 
   `schedule_expression`: is used to configure the schedule for the lambda.
   `state`: state of the cloudwatch event rule. Valid values are `DISABLED`, `ENABLED`, and `ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS`.
+  `lambda_memory_size`: lambda memery size limit.
   `lambda_timeout`: timeout for the lambda in seconds.
   `config`: configuration for the lambda function. Token path will be read by default from the module.
   EOF
   type = object({
     schedule_expression = optional(string, "rate(1 day)")
     state               = optional(string, "ENABLED")
+    lambda_memory_size  = optional(number, 512)
     lambda_timeout      = optional(number, 60)
     config = object({
       tokenPath      = optional(string)
@@ -634,4 +668,56 @@ variable "enable_on_demand_failover_for_errors" {
   description = "Enable on-demand failover. For example to fall back to on demand when no spot capacity is available the variable can be set to `InsufficientInstanceCapacity`. When not defined the default behavior is to retry later."
   type        = list(string)
   default     = []
+}
+
+variable "lambda_tags" {
+  description = "Map of tags that will be added to all the lambda function resources. Note these are additional tags to the default tags."
+  type        = map(string)
+  default     = {}
+}
+
+variable "metrics" {
+  description = "Configuration for metrics created by the module, by default metrics are disabled to avoid additional costs. When metrics are enable all metrics are created unless explicit configured otherwise."
+  type = object({
+    enable    = optional(bool, false)
+    namespace = optional(string, "GitHub Runners")
+    metric = optional(object({
+      enable_github_app_rate_limit    = optional(bool, true)
+      enable_job_retry                = optional(bool, true)
+      enable_spot_termination_warning = optional(bool, true)
+    }), {})
+  })
+  default = {}
+}
+
+variable "job_retry" {
+  description = <<-EOF
+    Configure job retries. The configuration enables job retries (for ephemeral runners). After creating the insances a message will be published to a job retry queue. The job retry check lambda is checking after a delay if the job is queued. If not the message will be published again on the scale-up (build queue). Using this feature can impact the reate limit of the GitHub app.
+
+    `enable`: Enable or disable the job retry feature.
+    `delay_in_seconds`: The delay in seconds before the job retry check lambda will check the job status.
+    `delay_backoff`: The backoff factor for the delay.
+    `lambda_memory_size`: Memory size limit in MB for the job retry check lambda.
+    'lambda_reserved_concurrent_executions': Amount of reserved concurrent executions for the job retry check lambda function. A value of 0 disables lambda from being triggered and -1 removes any concurrency limitations.
+    `lambda_timeout`: Time out of the job retry check lambda in seconds.
+    `max_attempts`: The maximum number of attempts to retry the job.
+  EOF
+
+  type = object({
+    enable                                = optional(bool, false)
+    delay_in_seconds                      = optional(number, 300)
+    delay_backoff                         = optional(number, 2)
+    lambda_memory_size                    = optional(number, 256)
+    lambda_reserved_concurrent_executions = optional(number, 1)
+
+    lambda_timeout = optional(number, 30)
+
+    max_attempts = optional(number, 1)
+  })
+  default = {}
+
+  validation {
+    condition     = var.job_retry.enable == false || (var.job_retry.enable == true && var.job_retry.delay_in_seconds <= 900)
+    error_message = "The maxium message delay for SWS is 900 seconds."
+  }
 }

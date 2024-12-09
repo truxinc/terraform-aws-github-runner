@@ -61,6 +61,7 @@ variable "multi_runner_config" {
       pool_runner_owner                       = optional(string, null)
       runner_as_root                          = optional(bool, false)
       runner_boot_time_in_minutes             = optional(number, 5)
+      runner_disable_default_labels           = optional(bool, false)
       runner_extra_labels                     = optional(list(string), [])
       runner_group_name                       = optional(string, "Default")
       runner_name_prefix                      = optional(string, "")
@@ -70,6 +71,7 @@ variable "multi_runner_config" {
       scale_down_schedule_expression          = optional(string, "cron(*/5 * * * ? *)")
       scale_up_reserved_concurrent_executions = optional(number, 1)
       userdata_template                       = optional(string, null)
+      userdata_content                        = optional(string, null)
       enable_jit_config                       = optional(bool, null)
       enable_runner_detailed_monitoring       = optional(bool, false)
       enable_cloudwatch_agent                 = optional(bool, true)
@@ -78,6 +80,8 @@ variable "multi_runner_config" {
       userdata_post_install                   = optional(string, "")
       runner_ec2_tags                         = optional(map(string), {})
       runner_iam_role_managed_policy_arns     = optional(list(string), [])
+      vpc_id                                  = optional(string, null)
+      subnet_ids                              = optional(list(string), null)
       idle_config = optional(list(object({
         cron             = string
         timeZone         = string
@@ -104,11 +108,19 @@ variable "multi_runner_config" {
         volume_size = 30
       }])
       pool_config = optional(list(object({
-        schedule_expression = string
-        size                = number
+        schedule_expression          = string
+        schedule_expression_timezone = optional(string)
+        size                         = number
       })), [])
+      job_retry = optional(object({
+        enable             = optional(bool, false)
+        delay_in_seconds   = optional(number, 300)
+        delay_backoff      = optional(number, 2)
+        lambda_memory_size = optional(number, 256)
+        lambda_timeout     = optional(number, 30)
+        max_attempts       = optional(number, 1)
+      }), {})
     })
-
     matcherConfig = object({
       labelMatchers = list(list(string))
       exactMatch    = optional(bool, false)
@@ -138,7 +150,7 @@ variable "multi_runner_config" {
         ebs_optimized: "The EC2 EBS optimized configuration."
         enable_ephemeral_runners: "Enable ephemeral runners, runners will only be used once."
         enable_job_queued_check: "Enables JIT configuration for creating runners instead of registration token based registraton. JIT configuration will only be applied for ephemeral runners. By default JIT confiugration is enabled for ephemeral runners an can be disabled via this override. When running on GHES without support for JIT configuration this variable should be set to true for ephemeral runners."
-        enable_runner_on_demand_failover_for_errors "Enable on-demand failover. For example to fall back to on demand when no spot capacity is available the variable can be set to `InsufficientInstanceCapacity`. When not defined the default behavior is to retry later."
+        enable_on_demand_failover_for_errors: "Enable on-demand failover. For example to fall back to on demand when no spot capacity is available the variable can be set to `InsufficientInstanceCapacity`. When not defined the default behavior is to retry later."
         enable_organization_runners: "Register runners to organization, instead of repo level"
         enable_runner_binaries_syncer: "Option to disable the lambda to sync GitHub runner distribution, useful when using a pre-build AMI."
         enable_ssm_on_runners: "Enable to allow access the runner instances for debugging purposes via SSM. Note that this adds additional permissions to the runner instances."
@@ -153,11 +165,12 @@ variable "multi_runner_config" {
         runner_additional_security_group_ids: "List of additional security groups IDs to apply to the runner. If added outside the multi_runner_config block, the additional security group(s) will be applied to all runner configs. If added inside the multi_runner_config, the additional security group(s) will be applied to the individual runner."
         runner_as_root: "Run the action runner under the root user. Variable `runner_run_as` will be ignored."
         runner_boot_time_in_minutes: "The minimum time for an EC2 runner to boot and register as a runner."
+        runner_disable_default_labels: "Disable default labels for the runners (os, architecture and `self-hosted`). If enabled, the runner will only have the extra labels provided in `runner_extra_labels`. In case you on own start script is used, this configuration parameter needs to be parsed via SSM."
         runner_extra_labels: "Extra (custom) labels for the runners (GitHub). Separate each label by a comma. Labels checks on the webhook can be enforced by setting `multi_runner_config.matcherConfig.exactMatch`. GitHub read-only labels should not be provided."
         runner_group_name: "Name of the runner group."
         runner_name_prefix: "Prefix for the GitHub runner name."
         runner_run_as: "Run the GitHub actions agent as user."
-        runners_maximum_count: "The maximum number of runners that will be created."
+        runners_maximum_count: "The maximum number of runners that will be created. Setting the variable to `-1` desiables the maximum check."
         scale_down_schedule_expression: "Scheduler expression to check every x for scale down."
         scale_up_reserved_concurrent_executions: "Amount of reserved concurrent executions for the scale-up lambda function. A value of 0 disables lambda from being triggered and -1 removes any concurrency limitations."
         userdata_template: "Alternative user-data template, replacing the default template. By providing your own user_data you have to take care of installing all required software, including the action runner. Variables userdata_pre/post_install are ignored."
@@ -169,10 +182,13 @@ variable "multi_runner_config" {
         userdata_post_install: "Script to be ran after the GitHub Actions runner is installed on the EC2 instances"
         runner_ec2_tags: "Map of tags that will be added to the launch template instance tag specifications."
         runner_iam_role_managed_policy_arns: "Attach AWS or customer-managed IAM policies (by ARN) to the runner IAM role"
+        vpc_id: "The VPC for security groups of the action runners. If not set uses the value of `var.vpc_id`."
+        subnet_ids: "List of subnets in which the action runners will be launched, the subnets needs to be subnets in the `vpc_id`. If not set, uses the value of `var.subnet_ids`."
         idle_config: "List of time period that can be defined as cron expression to keep a minimum amount of runners active instead of scaling down to 0. By defining this list you can ensure that in time periods that match the cron expression within 5 seconds a runner is kept idle."
         runner_log_files: "(optional) Replaces the module default cloudwatch log config. See https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Agent-Configuration-File-Details.html for details."
         block_device_mappings: "The EC2 instance block device configuration. Takes the following keys: `device_name`, `delete_on_termination`, `volume_type`, `volume_size`, `encrypted`, `iops`, `throughput`, `kms_key_id`, `snapshot_id`."
-        pool_config: "The configuration for updating the pool. The `pool_size` to adjust to by the events triggered by the `schedule_expression`. For example you can configure a cron expression for week days to adjust the pool to 10 and another expression for the weekend to adjust the pool to 1."
+        job_retry: "Experimental! Can be removed / changed without trigger a major release. Configure job retries. The configuration enables job retries (for ephemeral runners). After creating the insances a message will be published to a job retry queue. The job retry check lambda is checking after a delay if the job is queued. If not the message will be published again on the scale-up (build queue). Using this feature can impact the reate limit of the GitHub app."
+        pool_config: "The configuration for updating the pool. The `pool_size` to adjust to by the events triggered by the `schedule_expression`. For example you can configure a cron expression for week days to adjust the pool to 10 and another expression for the weekend to adjust the pool to 1. Use `schedule_expression_timezone` to override the schedule time zone (defaults to UTC)."
       }
       matcherConfig: {
         labelMatchers: "The list of list of labels supported by the runner configuration. `[[self-hosted, linux, x64, example]]`"
@@ -185,10 +201,22 @@ variable "multi_runner_config" {
   EOT
 }
 
+variable "scale_up_lambda_memory_size" {
+  description = "Memory size limit in MB for scale_up lambda."
+  type        = number
+  default     = 512
+}
+
 variable "runners_scale_up_lambda_timeout" {
   description = "Time out for the scale up lambda in seconds."
   type        = number
   default     = 30
+}
+
+variable "scale_down_lambda_memory_size" {
+  description = "Memory size limit in MB for scale down."
+  type        = number
+  default     = 512
 }
 
 variable "runners_scale_down_lambda_timeout" {
@@ -201,6 +229,12 @@ variable "webhook_lambda_zip" {
   description = "File location of the webhook lambda zip file."
   type        = string
   default     = null
+}
+
+variable "webhook_lambda_memory_size" {
+  description = "Memory size limit in MB for webhook lambda."
+  type        = number
+  default     = 256
 }
 
 variable "webhook_lambda_timeout" {
@@ -287,7 +321,7 @@ variable "log_level" {
 variable "lambda_runtime" {
   description = "AWS Lambda runtime."
   type        = string
-  default     = "nodejs18.x"
+  default     = "nodejs20.x"
 }
 
 variable "lambda_architecture" {
@@ -331,6 +365,12 @@ variable "runner_binaries_s3_versioning" {
   description = "Status of S3 versioning for runner-binaries S3 bucket. Once set to Enabled the change cannot be reverted via Terraform!"
   type        = string
   default     = "Disabled"
+}
+
+variable "runner_binaries_syncer_memory_size" {
+  description = "Memory size limit in MB for binary syncer lambda."
+  type        = number
+  default     = 256
 }
 
 variable "runner_binaries_syncer_lambda_timeout" {
@@ -512,32 +552,13 @@ variable "pool_lambda_reserved_concurrent_executions" {
   default     = 1
 }
 
-variable "enable_workflow_job_events_queue" {
-  description = "Enabling this experimental feature will create a secondory sqs queue to wich a copy of the workflow_job event will be delivered."
-  type        = bool
-  default     = false
-}
-
-variable "workflow_job_queue_configuration" {
-  description = "Configuration options for workflow job queue which is only applicable if the flag enable_workflow_job_events_queue is set to true."
-  type = object({
-    delay_seconds              = number
-    visibility_timeout_seconds = number
-    message_retention_seconds  = number
-  })
-  default = {
-    "delay_seconds" : null,
-    "visibility_timeout_seconds" : null,
-    "message_retention_seconds" : null
-  }
-}
-
 variable "ssm_paths" {
   description = "The root path used in SSM to store configuration and secreets."
   type = object({
     root    = optional(string, "github-action-runners")
     app     = optional(string, "app")
     runners = optional(string, "runners")
+    webhook = optional(string, "webhook")
   })
   default = {}
 }
@@ -564,12 +585,14 @@ variable "runners_ssm_housekeeper" {
 
   `schedule_expression`: is used to configure the schedule for the lambda.
   `enabled`: enable or disable the lambda trigger via the EventBridge.
+  `lambda_memory_size`: lambda memery size limit.
   `lambda_timeout`: timeout for the lambda in seconds.
   `config`: configuration for the lambda function. Token path will be read by default from the module.
   EOF
   type = object({
     schedule_expression = optional(string, "rate(1 day)")
     enabled             = optional(bool, true)
+    lambda_memory_size  = optional(number, 512)
     lambda_timeout      = optional(number, 60)
     config = object({
       tokenPath      = optional(string)
@@ -578,4 +601,77 @@ variable "runners_ssm_housekeeper" {
     })
   })
   default = { config = {} }
+}
+
+variable "instance_termination_watcher" {
+  description = <<-EOF
+    Configuration for the spot termination watcher lambda function. This feature is Beta, changes will not trigger a major release as long in beta.
+
+    `enable`: Enable or disable the spot termination watcher.
+    `memory_size`: Memory size linit in MB of the lambda.
+    `s3_key`: S3 key for syncer lambda function. Required if using S3 bucket to specify lambdas.
+    `s3_object_version`: S3 object version for syncer lambda function. Useful if S3 versioning is enabled on source bucket.
+    `timeout`: Time out of the lambda in seconds.
+    `zip`: File location of the lambda zip file.
+  EOF
+
+  type = object({
+    enable         = optional(bool, false)
+    enable_metrics = optional(string, null) # deprecated
+    features = optional(object({
+      enable_spot_termination_handler              = optional(bool, true)
+      enable_spot_termination_notification_watcher = optional(bool, true)
+    }), {})
+    memory_size       = optional(number, null)
+    s3_key            = optional(string, null)
+    s3_object_version = optional(string, null)
+    timeout           = optional(number, null)
+    zip               = optional(string, null)
+  })
+  default = {}
+
+  validation {
+    condition     = var.instance_termination_watcher.enable_metrics == null
+    error_message = "The feature `instance_termination_watcher` is deprecated and will be removed in a future release. Please use the `termination_watcher` variable instead."
+  }
+}
+
+variable "lambda_tags" {
+  description = "Map of tags that will be added to all the lambda function resources. Note these are additional tags to the default tags."
+  type        = map(string)
+  default     = {}
+}
+
+variable "matcher_config_parameter_store_tier" {
+  description = "The tier of the parameter store for the matcher configuration. Valid values are `Standard`, and `Advanced`."
+  type        = string
+  default     = "Standard"
+  validation {
+    condition     = contains(["Standard", "Advanced"], var.matcher_config_parameter_store_tier)
+    error_message = "`matcher_config_parameter_store_tier` value is not valid, valid values are: `Standard`, and `Advanced`."
+  }
+}
+
+variable "metrics" {
+  description = "Configuration for metrics created by the module, by default metrics are disabled to avoid additional costs. When metrics are enable all metrics are created unless explicit configured otherwise."
+  type = object({
+    enable    = optional(bool, false)
+    namespace = optional(string, "GitHub Runners")
+    metric = optional(object({
+      enable_github_app_rate_limit    = optional(bool, true)
+      enable_job_retry                = optional(bool, true)
+      enable_spot_termination_warning = optional(bool, true)
+    }), {})
+  })
+  default = {}
+}
+
+variable "eventbridge" {
+  description = "Enable the use of EventBridge by the module. By enabling this feature events will be put on the EventBridge by the webhook instead of directly dispatching to queues for scaling."
+  type = object({
+    enable        = optional(bool, false)
+    accept_events = optional(list(string), [])
+  })
+
+  default = {}
 }
