@@ -99,7 +99,6 @@ Talk to the forestkeepers in the `runners-channel` on Slack.
 | <a name="module_instance_termination_watcher"></a> [instance\_termination\_watcher](#module\_instance\_termination\_watcher) | ./modules/termination-watcher | n/a |
 | <a name="module_runner_binaries"></a> [runner\_binaries](#module\_runner\_binaries) | ./modules/runner-binaries-syncer | n/a |
 | <a name="module_runners"></a> [runners](#module\_runners) | ./modules/runners | n/a |
-| <a name="module_ssm"></a> [ssm](#module\_ssm) | ./modules/ssm | n/a |
 | <a name="module_webhook"></a> [webhook](#module\_webhook) | ./modules/webhook | n/a |
 
 ## Resources
@@ -112,6 +111,12 @@ Talk to the forestkeepers in the `runners-channel` on Slack.
 | [aws_sqs_queue_policy.build_queue_policy](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sqs_queue_policy) | resource |
 | [random_string.random](https://registry.terraform.io/providers/hashicorp/random/latest/docs/resources/string) | resource |
 | [aws_iam_policy_document.deny_unsecure_transport](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
+| [aws_ssm_parameter.github_app_id](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/ssm_parameter) | data source |
+| [aws_ssm_parameter.github_app_key_base64](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/ssm_parameter) | data source |
+| [aws_ssm_parameter.github_app_webhook_secret](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/ssm_parameter) | data source |
+| [aws_ssm_parameter.subnet1_id](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/ssm_parameter) | data source |
+| [aws_ssm_parameter.subnet2_id](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/ssm_parameter) | data source |
+| [aws_ssm_parameter.vpc_id](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/ssm_parameter) | data source |
 
 ## Inputs
 
@@ -155,7 +160,6 @@ Talk to the forestkeepers in the `runners-channel` on Slack.
 | <a name="input_eventbridge"></a> [eventbridge](#input\_eventbridge) | Enable the use of EventBridge by the module. By enabling this feature events will be put on the EventBridge by the webhook instead of directly dispatching to queues for scaling.<br/><br/>    `enable`: Enable the EventBridge feature.<br/>    `accept_events`: List can be used to only allow specific events to be putted on the EventBridge. By default all events, empty list will be be interpreted as all events. | <pre>object({<br/>    enable        = optional(bool, false)<br/>    accept_events = optional(list(string), null)<br/>  })</pre> | `{}` | no |
 | <a name="input_ghes_ssl_verify"></a> [ghes\_ssl\_verify](#input\_ghes\_ssl\_verify) | GitHub Enterprise SSL verification. Set to 'false' when custom certificate (chains) is used for GitHub Enterprise Server (insecure). | `bool` | `true` | no |
 | <a name="input_ghes_url"></a> [ghes\_url](#input\_ghes\_url) | GitHub Enterprise Server URL. Example: https://github.internal.co - DO NOT SET IF USING PUBLIC GITHUB | `string` | `null` | no |
-| <a name="input_github_app"></a> [github\_app](#input\_github\_app) | GitHub app parameters, see your github app. Ensure the key is the base64-encoded `.pem` file (the output of `base64 app.private-key.pem`, not the content of `private-key.pem`). | <pre>object({<br/>    key_base64     = string<br/>    id             = string<br/>    webhook_secret = string<br/>  })</pre> | n/a | yes |
 | <a name="input_idle_config"></a> [idle\_config](#input\_idle\_config) | List of time periods, defined as a cron expression, to keep a minimum amount of runners active instead of scaling down to 0. By defining this list you can ensure that in time periods that match the cron expression within 5 seconds a runner is kept idle. | <pre>list(object({<br/>    cron             = string<br/>    timeZone         = string<br/>    idleCount        = number<br/>    evictionStrategy = optional(string, "oldest_first")<br/>  }))</pre> | `[]` | no |
 | <a name="input_instance_allocation_strategy"></a> [instance\_allocation\_strategy](#input\_instance\_allocation\_strategy) | The allocation strategy for spot instances. AWS recommends using `price-capacity-optimized` however the AWS default is `lowest-price`. | `string` | `"lowest-price"` | no |
 | <a name="input_instance_max_spot_price"></a> [instance\_max\_spot\_price](#input\_instance\_max\_spot\_price) | Max price price for spot instances per hour. This variable will be passed to the create fleet as max spot price for the fleet. | `string` | `null` | no |
@@ -231,7 +235,6 @@ Talk to the forestkeepers in the `runners-channel` on Slack.
 | <a name="input_scale_up_reserved_concurrent_executions"></a> [scale\_up\_reserved\_concurrent\_executions](#input\_scale\_up\_reserved\_concurrent\_executions) | Amount of reserved concurrent executions for the scale-up lambda function. A value of 0 disables lambda from being triggered and -1 removes any concurrency limitations. | `number` | `1` | no |
 | <a name="input_ssm_paths"></a> [ssm\_paths](#input\_ssm\_paths) | The root path used in SSM to store configuration and secrets. | <pre>object({<br/>    root       = optional(string, "github-action-runners")<br/>    app        = optional(string, "app")<br/>    runners    = optional(string, "runners")<br/>    webhook    = optional(string, "webhook")<br/>    use_prefix = optional(bool, true)<br/>  })</pre> | `{}` | no |
 | <a name="input_state_event_rule_binaries_syncer"></a> [state\_event\_rule\_binaries\_syncer](#input\_state\_event\_rule\_binaries\_syncer) | Option to disable EventBridge Lambda trigger for the binary syncer, useful to stop automatic updates of binary distribution | `string` | `"ENABLED"` | no |
-| <a name="input_subnet_ids"></a> [subnet\_ids](#input\_subnet\_ids) | List of subnets in which the action runner instances will be launched. The subnets need to exist in the configured VPC (`vpc_id`), and must reside in different availability zones (see https://github.com/philips-labs/terraform-aws-github-runner/issues/2904) | `list(string)` | n/a | yes |
 | <a name="input_syncer_lambda_s3_key"></a> [syncer\_lambda\_s3\_key](#input\_syncer\_lambda\_s3\_key) | S3 key for syncer lambda function. Required if using an S3 bucket to specify lambdas. | `string` | `null` | no |
 | <a name="input_syncer_lambda_s3_object_version"></a> [syncer\_lambda\_s3\_object\_version](#input\_syncer\_lambda\_s3\_object\_version) | S3 object version for syncer lambda function. Useful if S3 versioning is enabled on source bucket. | `string` | `null` | no |
 | <a name="input_tags"></a> [tags](#input\_tags) | Map of tags that will be added to created resources. By default resources will be tagged with name and environment. | `map(string)` | `{}` | no |
@@ -240,7 +243,6 @@ Talk to the forestkeepers in the `runners-channel` on Slack.
 | <a name="input_userdata_post_install"></a> [userdata\_post\_install](#input\_userdata\_post\_install) | Script to be ran after the GitHub Actions runner is installed on the EC2 instances | `string` | `""` | no |
 | <a name="input_userdata_pre_install"></a> [userdata\_pre\_install](#input\_userdata\_pre\_install) | Script to be ran before the GitHub Actions runner is installed on the EC2 instances | `string` | `""` | no |
 | <a name="input_userdata_template"></a> [userdata\_template](#input\_userdata\_template) | Alternative user-data template file path, replacing the default template. By providing your own user\_data you have to take care of installing all required software, including the action runner. Variables userdata\_pre/post\_install are ignored. | `string` | `null` | no |
-| <a name="input_vpc_id"></a> [vpc\_id](#input\_vpc\_id) | The VPC for security groups of the action runners. | `string` | n/a | yes |
 | <a name="input_webhook_lambda_apigateway_access_log_settings"></a> [webhook\_lambda\_apigateway\_access\_log\_settings](#input\_webhook\_lambda\_apigateway\_access\_log\_settings) | Access log settings for webhook API gateway. | <pre>object({<br/>    destination_arn = string<br/>    format          = string<br/>  })</pre> | `null` | no |
 | <a name="input_webhook_lambda_memory_size"></a> [webhook\_lambda\_memory\_size](#input\_webhook\_lambda\_memory\_size) | Memory size limit in MB for webhook lambda in. | `number` | `256` | no |
 | <a name="input_webhook_lambda_s3_key"></a> [webhook\_lambda\_s3\_key](#input\_webhook\_lambda\_s3\_key) | S3 key for webhook lambda function. Required if using S3 bucket to specify lambdas. | `string` | `null` | no |
@@ -257,7 +259,6 @@ Talk to the forestkeepers in the `runners-channel` on Slack.
 | <a name="output_instance_termination_watcher"></a> [instance\_termination\_watcher](#output\_instance\_termination\_watcher) | n/a |
 | <a name="output_queues"></a> [queues](#output\_queues) | SQS queues. |
 | <a name="output_runners"></a> [runners](#output\_runners) | n/a |
-| <a name="output_ssm_parameters"></a> [ssm\_parameters](#output\_ssm\_parameters) | n/a |
 | <a name="output_webhook"></a> [webhook](#output\_webhook) | n/a |
 <!-- END_TF_DOCS -->
 <!-- --8<-- [end:mkdocsrunners] -->
