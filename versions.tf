@@ -15,6 +15,9 @@ terraform {
     bucket = "trux-devops"
     key    = "GitHub_Actions/ghaRunnerStatefile/terraform.tfstate"
     region = "us-east-2"
-    profile = "default"
   }
+}
+# Added AWS provider
+provider "aws" {
+  region  = "us-east-1"
 }
