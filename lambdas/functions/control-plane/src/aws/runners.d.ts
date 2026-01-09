@@ -10,6 +10,7 @@ export interface RunnerList {
   repo?: string;
   org?: string;
   orphan?: boolean;
+  runnerId?: string;
 }
 
 export interface RunnerInfo {
@@ -43,4 +44,5 @@ export interface RunnerInputParameters {
   amiIdSsmParameterName?: string;
   tracingEnabled?: boolean;
   onDemandFailoverOnError?: string[];
+  scaleErrors: string[];
 }

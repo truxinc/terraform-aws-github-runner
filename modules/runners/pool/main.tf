@@ -23,6 +23,7 @@ resource "aws_lambda_function" "pool" {
       ENABLE_JIT_CONFIG                        = var.config.runner.enable_jit_config
       ENVIRONMENT                              = var.config.prefix
       GHES_URL                                 = var.config.ghes.url
+      USER_AGENT                               = var.config.user_agent
       INSTANCE_ALLOCATION_STRATEGY             = var.config.instance_allocation_strategy
       INSTANCE_MAX_SPOT_PRICE                  = var.config.instance_max_spot_price
       INSTANCE_TARGET_CAPACITY_TYPE            = var.config.instance_target_capacity_type
@@ -46,6 +47,7 @@ resource "aws_lambda_function" "pool" {
       POWERTOOLS_TRACER_CAPTURE_HTTPS_REQUESTS = var.tracing_config.capture_http_requests
       POWERTOOLS_TRACER_CAPTURE_ERROR          = var.tracing_config.capture_error
       ENABLE_ON_DEMAND_FAILOVER_FOR_ERRORS     = jsonencode(var.config.runner.enable_on_demand_failover_for_errors)
+      SCALE_ERRORS                             = jsonencode(var.config.runner.scale_errors)
     }
   }
 
@@ -73,7 +75,7 @@ resource "aws_cloudwatch_log_group" "pool" {
 }
 
 resource "aws_iam_role" "pool" {
-  name                 = "${var.config.prefix}-action-pool-lambda-role"
+  name                 = "${substr("${var.config.prefix}-pool-lambda", 0, 54)}-${substr(md5("${var.config.prefix}-pool-lambda"), 0, 8)}"
   assume_role_policy   = data.aws_iam_policy_document.lambda_assume_role_policy.json
   path                 = var.config.role_path
   permissions_boundary = var.config.role_permissions_boundary
@@ -90,6 +92,7 @@ resource "aws_iam_role_policy" "pool" {
     github_app_key_base64_arn      = var.config.github_app_parameters.key_base64.arn
     kms_key_arn                    = var.config.kms_key_arn
     ami_kms_key_arn                = var.config.ami_kms_key_arn
+    ssm_ami_id_parameter_arn       = var.config.ami_id_ssm_parameter_arn
   })
 }
 
@@ -187,13 +190,13 @@ resource "aws_iam_role" "scheduler" {
   permissions_boundary = var.config.role_permissions_boundary
 
   assume_role_policy = data.aws_iam_policy_document.scheduler_assume.json
+  tags               = var.config.tags
+}
 
-  inline_policy {
-    name   = "terraform"
-    policy = data.aws_iam_policy_document.scheduler.json
-  }
-
-  tags = var.config.tags
+resource "aws_iam_role_policy" "scheduler" {
+  name   = "terraform"
+  role   = aws_iam_role.scheduler.name
+  policy = data.aws_iam_policy_document.scheduler.json
 }
 
 resource "aws_scheduler_schedule" "pool" {

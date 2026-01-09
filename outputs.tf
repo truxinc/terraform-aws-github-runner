@@ -25,7 +25,7 @@ output "binaries_syncer" {
     lambda           = module.runner_binaries[0].lambda
     lambda_log_group = module.runner_binaries[0].lambda_log_group
     lambda_role      = module.runner_binaries[0].lambda_role
-    location         = "s3://${module.runner_binaries[0].bucket.id}/module.runner_binaries[0].bucket.key"
+    location         = "s3://${module.runner_binaries[0].bucket.id}/${module.runner_binaries[0].runner_distribution_object_key}"
     bucket           = module.runner_binaries[0].bucket
   } : null
 }
@@ -44,7 +44,11 @@ output "webhook" {
 }
 
 output "ssm_parameters" {
-  value = module.ssm.parameters
+  value = { for k, v in local.github_app_parameters : k => {
+    name = v.name
+    arn  = v.arn
+    }
+  }
 }
 
 

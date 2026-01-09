@@ -25,6 +25,7 @@ resource "aws_lambda_function" "scale_down" {
       ENVIRONMENT                              = var.prefix
       ENABLE_METRIC_GITHUB_APP_RATE_LIMIT      = var.metrics.enable && var.metrics.metric.enable_github_app_rate_limit
       GHES_URL                                 = var.ghes_url
+      USER_AGENT                               = var.user_agent
       LOG_LEVEL                                = var.log_level
       MINIMUM_RUNNING_TIME_IN_MINUTES          = coalesce(var.minimum_running_time_in_minutes, local.min_runtime_defaults[var.runner_os])
       NODE_TLS_REJECT_UNAUTHORIZED             = var.ghes_url != null && !var.ghes_ssl_verify ? 0 : 1
@@ -84,7 +85,7 @@ resource "aws_lambda_permission" "scale_down" {
 }
 
 resource "aws_iam_role" "scale_down" {
-  name                 = "${var.prefix}-action-scale-down-lambda-role"
+  name                 = "${substr("${var.prefix}-scale-down-lambda", 0, 54)}-${substr(md5("${var.prefix}-scale-down-lambda"), 0, 8)}"
   assume_role_policy   = data.aws_iam_policy_document.lambda_assume_role_policy.json
   path                 = local.role_path
   permissions_boundary = var.role_permissions_boundary

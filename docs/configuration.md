@@ -6,12 +6,12 @@ To be able to support a number of use-cases, the module has quite a lot of confi
 
 - Org vs Repo level. You can configure the module to connect the runners in GitHub on an org level and share the runners in your org, or set the runners on repo level and the module will install the runner to the repo. There can be multiple repos but runners are not shared between repos.
 - Multi-Runner module. This modules allows you to create multiple runner configurations with a single webhook and single GitHub App to simplify deployment of different types of runners. Check the detailed module [documentation](modules/public/multi-runner.md) for more information or checkout the [multi-runner example](examples/multi-runner.md).
-- Webhook mode, the module can be deployed in `direct` mode or `EventBridge` (Experimental) mode. The `direct` mode is the default and will directly distribute to SQS for the scale-up lambda. The `EventBridge` mode will publish the events to a eventbus, the rule then directs the received events to a dispatch lambda. The dispatch lambda will send the event to the SQS queue. The `EventBridge` mode is useful when you want to have more control over the events and potentially filter them. The `EventBridge` mode is disabled by default. An example of what the `EventBridge` mode could be used for is building a data lake, build metrics, act on `workflow_job` job started events, etc.
+- Webhook mode, the module can be deployed in `direct` mode or `EventBridge` (Experimental) mode. The `direct` mode is the default and will directly distribute to SQS for the scale-up lambda. The `EventBridge` mode will publish the events to a eventbus, the rule then directs the received events to a dispatch lambda. The dispatch lambda will send the event to the SQS queue. The `EventBridge` mode is the default and allows to have more control over the events and potentially filter them. The `EventBridge` mode can be disabled, messages are sent directed to queues in that case. An example of what the `EventBridge` mode could be used for is building a data lake, build metrics, act on `workflow_job` job started events, etc.
 - Linux vs Windows. You can configure the OS types linux and win. Linux will be used by default.
-- Re-use vs Ephemeral. By default runners are re-used, until detected idle. Once idle they will be removed from the pool. To improve security we are introducing ephemeral runners. Those runners are only used for one job. Ephemeral runners only work in combination with the workflow job event. For ephemeral runners the lambda requests a JIT (just in time) configuration via the GitHub API to register the runner. [JIT configuration](https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions#using-just-in-time-runners) is limited to ephemeral runners (and currently not supported by GHES). For non-ephemeral runners, a registration token is always requested. In both cases the configuration is made available to the instance via the same SSM parameter. To disable JIT configuration for ephemeral runners set `enable_jit_config` to `false`. We also suggest using a pre-build AMI to improve the start time of jobs for ephemeral runners.
+- Reuse vs Ephemeral. By default runners are reused, until detected idle. Once idle they will be removed from the pool. To improve security we are introducing ephemeral runners. Those runners are only used for one job. Ephemeral runners only work in combination with the workflow job event. For ephemeral runners the lambda requests a JIT (just in time) configuration via the GitHub API to register the runner. [JIT configuration](https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions#using-just-in-time-runners) is limited to ephemeral runners (and currently not supported by GHES). For non-ephemeral runners, a registration token is always requested. In both cases the configuration is made available to the instance via the same SSM parameter. To disable JIT configuration for ephemeral runners set `enable_jit_config` to `false`. We also suggest using a pre-build AMI to improve the start time of jobs for ephemeral runners.
 - Job retry (**Beta**). By default the scale-up lambda will discard the message when it is handled. Meaning in the ephemeral use-case an instance is created. The created runner will ask GitHub for a job, no guarantee it will run the job for which it was scaling. Result could be that with small system hick-up the job is keeping waiting for a runner. Enable a pool (org runners) is one option to avoid this problem. Another option is to enable the job retry function. Which will retry the job after a delay for a configured number of times.
-- GitHub Cloud vs GitHub Enterprise Server (GHES). The runners support GitHub Cloud as well GitHub Enterprise Server. For GHES, we rely on our community for support and testing. We at Philips have no capability to test GHES ourselves.
-- Spot vs on-demand. The runners use either the EC2 spot or on-demand life cycle. Runners will be created via the AWS [CreateFleet API](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_CreateFleet.html). The module (scale up lambda) will request via the CreateFleet API to create instances in one of the subnets and of the specified instance types.
+- GitHub Cloud vs GitHub Enterprise Server (GHES). The runners support GitHub Cloud (Public GitHub - github.com), GitHub Data Residency instances (ghe.com), and GitHub Enterprise Server. For GHES, we rely on our community for support and testing. We have no capability to test GHES ourselves.
+- Spot vs on-demand. The runners use either the EC2 spot or on-demand lifecycle. Runners will be created via the AWS [CreateFleet API](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_CreateFleet.html). The module (scale up lambda) will request via the CreateFleet API to create instances in one of the subnets and of the specified instance types.
 - ARM64 support via Graviton/Graviton2 instance-types. When using the default example or top-level module, specifying `instance_types` that match a Graviton/Graviton 2 (ARM64) architecture (e.g. a1, t4g or any 6th-gen `g` or `gd` type), you must also specify `runner_architecture = "arm64"` and the sub-modules will be automatically configured to provision with ARM64 AMIs and leverage GitHub's ARM64 action runner. See below for more details.
 - Disable default labels for the runners (os, architecture and `self-hosted`) can achieve by setting `runner_disable_default_labels` = true. If enabled, the runner will only have the extra labels provided in `runner_extra_labels`. In case you on own start script is used, this configuration parameter needs to be parsed via SSM.
 
@@ -19,22 +19,55 @@ To be able to support a number of use-cases, the module has quite a lot of confi
 
 The module uses the AWS System Manager Parameter Store to store configuration for the runners, as well as registration tokens and secrets for the Lambdas. Paths for the parameters can be configured via the variable `ssm_paths`. The location of the configuration parameters is retrieved by the runners via the instance tag `ghr:ssm_config_path`. The following default paths will be used. Tokens or JIT config stored in the token path will be deleted after retrieval by instance, data not deleted after a day will be deleted by a SSM housekeeper lambda.
 
+Furthermore, to accommodate larger JIT configurations or other stored values, the module implements automatic tier selection for SSM parameters:
+
+-   **Parameter Tiering**: If the size of a parameter's value exceeds 4KB (specifically, 4000 bytes), the module will automatically use the 'Advanced' tier for that SSM parameter. Values smaller than this threshold will use the 'Standard' tier.
+-   **Cost Implications**: While the 'Standard' tier is generally free for a certain number of parameters and operations, the 'Advanced' tier incurs costs. These costs are typically pro-rated per hour for each parameter stored using the Advanced tier. For detailed and up-to-date pricing, please refer to the [AWS Systems Manager Pricing page](https://aws.amazon.com/systems-manager/pricing/#Parameter_Store).
+-   **Housekeeping Recommendation**: The last sentence of the "AWS SSM Parameters" section already mentions that "data not deleted after a day will be deleted by a SSM housekeeper lambda." It is crucial to ensure this or a similar housekeeping mechanism is active and correctly configured, especially considering the potential costs associated with 'Advanced' tier parameters. This utility should identify and delete any orphaned parameters to help manage costs and maintain a clean SSM environment.
+
 | Path                                                          | Description                                                                                                                                                                                                                     |
 | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ssm_paths.root/var.prefix?/app/`                             | App secrets used by Lambda's                                                                                                                                                                                                    |
 | `ssm_paths.root/var.prefix?/runners/config/<name>`            | Configuration parameters used by runner start script                                                                                                                                                                            |
 | `ssm_paths.root/var.prefix?/runners/tokens/<ec2-instance-id>` | Either JIT configuration (ephemeral runners) or registration tokens (non ephemeral runners) generated by the control plane (scale-up lambda), and consumed by the start script on the runner to activate / register the runner. |
-| `ssm_paths.root/var.prefix?/webhook/runner-matcher-config`                             | Runner matcher config used by webhook to decide the target for the webhook event.                                                                                                                                                                                                    |
+| `ssm_paths.root/var.prefix?/webhook/runner-matcher-config`    | Runner matcher config used by webhook to decide the target for the webhook event.                                                                                                                                               |
 
 Available configuration parameters:
 
-| Parameter name                      | Description                                                                                       |
-|-------------------------------------|---------------------------------------------------------------------------------------------------|
-| `agent_mode`                        | Indicates if the agent is running in ephemeral mode or not.                                       |
-| `disable_default_labels`            | Indicates if the default labels for the runners (os, architecture and `self-hosted`) are disabled |
-| `enable_cloudwatch`                 | Configuration for the cloudwatch agent to stream logging.                                         |
-| `run_as`                            | The user used for running the GitHub action runner agent.                                         |
-| `token_path`                        | The path where tokens are stored.                                                                 |
+| Parameter name           | Description                                                                                       |
+| ------------------------ | ------------------------------------------------------------------------------------------------- |
+| `agent_mode`             | Indicates if the agent is running in ephemeral mode or not.                                       |
+| `disable_default_labels` | Indicates if the default labels for the runners (os, architecture and `self-hosted`) are disabled |
+| `enable_cloudwatch`      | Configuration for the cloudwatch agent to stream logging.                                         |
+| `run_as`                 | The user used for running the GitHub action runner agent.                                         |
+| `token_path`             | The path where tokens are stored.                                                                 |
+
+### Note regarding GitHub App secrets provisioning in SSM
+
+SSM parameters for GitHub App secrets (`webhook_secret`, `key_base64`, `id`) can also be manually created at the SSM path of your choice.
+
+If you opt for this approach, please fill the `*_ssm` attributes of the `github_app` variable as following:
+
+```
+github_app = {
+    key_base64_ssm     = {
+      name = "/your/path/to/ssm/parameter/key-base-64"
+      arn = "arn:aws:ssm:::parameter/your/path/to/ssm/parameter/key-base-64"
+    }
+    id_ssm             = {
+      name = "/your/path/to/ssm/parameter/id"
+      arn = "arn:aws:ssm:::parameter/your/path/to/ssm/parameter/id"
+    }
+    webhook_secret_ssm = {
+      name = "/your/path/to/ssm/parameter/webhook-secret"
+      arn = "arn:aws:ssm:::parameter/your/path/to/ssm/parameter/webhook-secret"
+    }
+  }
+```
+
+Manually creating the SSM parameters that hold the configuration of your GitHub App avoids leaking critical plain text values in your terraform state and version control system. This is a recommended security practice for handling sensitive credentials.
+
+You can read more [over here](../examples/external-managed-ssm-secrets/README.md).
 
 ## Encryption
 
@@ -120,11 +153,9 @@ You can configure runners to be ephemeral, in which case runners will be used on
 - The scale down lambda is still active, and should only remove orphan instances. But there is no strict check in place. So ensure you configure the `minimum_running_time_in_minutes` to a value that is high enough to get your runner booted and connected to avoid it being terminated before executing a job.
 - The messages sent from the webhook lambda to the scale-up lambda are by default delayed by SQS, to give available runners a chance to start the job before the decision is made to scale more runners. For ephemeral runners there is no need to wait. Set `delay_webhook_event` to `0`.
 - All events in the queue will lead to a new runner created by the lambda. By setting `enable_job_queued_check` to `true` you can enforce a rule of only creating a runner if the event has a correlated queued job. Setting this can avoid creating useless runners. For example, a job getting cancelled before a runner was created or if the job was already picked up by another runner. We suggest using this in combination with a pool.
-- To ensure runners are created in the same order GitHub sends the events, by default we use a FIFO queue. This is mainly relevant for repo level runners. For ephemeral runners you can set `enable_fifo_build_queue` to `false`.
 - Errors related to scaling should be retried via SQS. You can configure `job_queue_retention_in_seconds` and `redrive_build_queue` to tune the behavior. We have no mechanism to avoid events never being processed, which means potentially no runner gets created and the job in GitHub times out in 6 hours.
 
 The example for [ephemeral runners](examples/ephemeral.md) is based on the [default example](examples/default.md). Have look at the diff to see the major configuration differences.
-
 
 ## Job retry (**Beta**)
 
@@ -134,10 +165,45 @@ For checking the job status a API call is made to GitHub. Which can exhaust the 
 
 The option `job_retry.delay_in_seconds` is the delay before the job status is checked. The delay is increased by the factor `job_retry.delay_backoff` for each attempt. The upper bound for a delay is 900 seconds, which is the max message delay on SQS. The maximum number of attempts is configured via `job_retry.max_attempts`. The delay should be set to a higher value than the time it takes to start a runner.
 
-
 ## Prebuilt Images
 
 This module also allows you to run agents from a prebuilt AMI to gain faster startup times. The module provides several examples to build your own custom AMI. To remove old images, an [AMI housekeeper module](modules/public/ami-housekeeper.md) can be used. See the [AMI examples](ami-examples/index.md) for more details.
+
+## AMI Configuration
+
+> **Note:** By default, a runner AMI update requires a re-apply of the terraform configuration, as the runner AMI ID is looked up by a terraform data source. To avoid this, you can use or `ami.id_ssm_parameter_arn` to have the scale-up lambda dynamically lookup the runner AMI ID from an SSM parameter at instance launch time. Said SSM parameter is managed outside of this module (e.g. by a runner AMI build workflow).
+
+By default, the module will automatically select appropriate AMI images:
+
+- For Linux x64: Amazon Linux 2023 x86_64
+- For Linux ARM64: Amazon Linux 2023 ARM64
+- For Windows: Windows Server 2022 English Full ECS Optimized
+
+However, you can override these defaults using the `ami` object in two ways:
+
+1. **Using AMI Filters**
+
+You can define filters and owners to look up an AMI. The module will store the AMI ID in an SSM parameter that is managed by the module.
+
+```hcl
+ami = {
+  filter = {
+    name   = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-*"]
+    state  = ["available"]
+  }
+  owners = ["amazon"]
+}
+```
+
+2. **Using SSM Parameter**
+
+Provide a parameter in SSM that contains the AMI ID. The parameter should be of type `String` and the module will grant the required lambdas access to this parameter.
+
+```hcl
+ami = {
+  id_ssm_parameter_arn = "arn:aws:ssm:region:account:parameter/path/to/ami/parameter"
+}
+```
 
 ## Logging
 
@@ -185,18 +251,18 @@ The distributed architecture of this application can make it difficult to troubl
 This tracing config generates timelines for following events:
 
 - Basic lifecycle of lambda function
-- Traces for Github API calls (can be configured by capture_http_requests).
+- Traces for GitHub API calls (can be configured by capture_http_requests).
 - Traces for all AWS SDK calls
 
 This feature has been disabled by default.
 
 ### Multiple runner module in your AWS account
 
-The watcher will act on all spot termination notificatins and log all onses relevant to the runner module. Therefor we suggest to only deploy the watcher once. You can either deploy the watcher by enabling in one of your deployments or deploy the watcher as a stand alone module.
+The watcher will act on all spot termination notifications and log the ones relevant to the runner module. Therefor we suggest to only deploy the watcher once. You can either deploy the watcher by enabling in one of your deployments or deploy the watcher as a stand alone module.
 
 ## Metrics
 
-The module supports metrics (experimental feature) to monitor the system. The metrics are disabled by default. To enable the metrics set `metrics.enable = true`. If set to true, all module managed metrics are used, you can configure the one by one via the `metrics` object. The metrics are created in the namespace `GitHub Runners`.
+The module supports metrics (experimental feature) to monitor the system. The metrics are disabled by default. To enable the metrics set `metrics.enable = true`. If set to true, all module managed metrics are used, you can configure them one by one via the `metrics` object. The metrics are created in the namespace `GitHub Runners`.
 
 ### Supported metrics
 
@@ -220,28 +286,28 @@ In case the setup does not work as intended, trace the events through this seque
 
 This feature is in early stage and therefore disabled by default. To enable the watcher, set `instance_termination_watcher.enable = true`.
 
-The termination watcher is currently watching for spot terminations. The module is only taken events into account for instances tagged with `ghr:environment` by default when deployment the module as part of one of the main modules (root or multi-runner). The module can also be deployed stand-alone, in this case, the tag filter needs to be tunned.
+The termination watcher is currently watching for spot terminations. The module only takes events into account for instances tagged with `ghr:environment` by default, when the module is deployed as part of one of the main modules (root or multi-runner). The module can also be deployed stand-alone, in this case, the tag filter needs to be tuned.
 
 ### Termination notification
 
-The watcher is listening for spot termination warnings and create a log message and optionally a metric. The watcher is disabled by default. The feature is enabled once the watcher is enabled, the feature can be disabled explicit by setting `instance_termination_watcher.features.enable_spot_termination_handler = false`.
+The watcher is listening for spot termination warnings and creates a log message and optionally a metric. The watcher is disabled by default. The feature is enabled once the watcher is enabled. It can be disabled explicitly by setting `instance_termination_watcher.features.enable_spot_termination_handler = false`.
 
-- Logs: The module will log all termination notifications. For each warning it will look up instance details and log the environment, instance type and time the instance is running. As well some other details.
-- Metrics: Metrics are disabled by default, this to avoid costs. Once enabled a metric will be created for each warning with at least dimensions for the environment and instance type. THe metric name space can be configured via the variables. The metric name used is `SpotInterruptionWarning`.
+- Logs: The module will log all termination notifications. For each warning it will look up instance details and log the environment, instance type and time the instance is running, as well as some other details.
+- Metrics: Metrics are disabled by default, in order to avoid costs. Once enabled a metric will be created for each warning with at least dimensions for the environment and instance type. The metric name space can be configured via the variables. The metric name used is `SpotInterruptionWarning`.
 
 ### Termination handler
 
 !!! warning
-    This feature will only work once the CloudTrail is enabled.
+This feature will only work once CloudTrail is enabled.
 
-The termination handler is listening for spot terminations by capture the `BidEvictedEvent` via CloudTrail. The handler will log and optionally create a metric for each termination. The intend is to enhance the logic to inform the user about the termination via the GitHub Job or Workflow run. The feature is disabled by default. The feature is enabled once the watcher is enabled, the feature can be disabled explicit by setting `instance_termination_watcher.features.enable_spot_termination_handler = false`.
+The termination handler is listening for spot terminations by capturing the `BidEvictedEvent` via CloudTrail. The handler will log and optionally create a metric for each termination. The intent is to enhance the logic to inform the user about the termination via the GitHub Job or Workflow run. The feature is disabled by default. The feature is enabled once the watcher is enabled. It can be disabled explicitly by setting `instance_termination_watcher.features.enable_spot_termination_handler = false`.
 
-- Logs: The module will log all termination notifications. For each warning it will look up instance details and log the environment, instance type and time the instance is running. As well some other details.
-- Metrics: Metrics are disabled by default, this to avoid costs. Once enabled a metric will be created for each termination with at least dimensions for the environment and instance type. THe metric name space can be configured via the variables. The metric name used is `SpotTermination`.
+- Logs: The module will log all termination notifications. For each warning it will look up instance details and log the environment, instance type and time the instance is running, as well as some other details.
+- Metrics: Metrics are disabled by default, in order to avoid costs. Once enabled a metric will be created for each termination with at least dimensions for the environment and instance type. THe metric name space can be configured via the variables. The metric name used is `SpotTermination`.
 
 ### Log example (both warnings and terminations)
 
-Below an example of the the log messages created.
+Below is an example of the log messages created.
 
 ```
 {
@@ -264,18 +330,18 @@ Below an example of the the log messages created.
 
 ### EventBridge
 
-This module can be deployed in using the mode `EventBridge` (Experimental). The `EventBridge` mode will publish an event to a eventbus. Within the eventbus, there is a target rule set, sending events to the dispatch lambda. The `EventBridge` mode is disabled by default.
+This module can be deployed in `EventBridge` mode. The `EventBridge` mode will publish an event to an eventbus. Within the eventbus, there is a target rule set, sending events to the dispatch lambda. The `EventBridge` mode is enabled by default.
 
-Example to use the EventBridge:
+Example to extend the EventBridge:
 
 ```hcl
 
 module "runners" {
-  source = "philips-labs/github-runners/aws"
+  source = "github-aws-runners/github-runners/aws"
 
   ...
   eventbridge = {
-    enable = true
+    enable = false
   }
   ...
 }
@@ -286,7 +352,7 @@ locals {
 
 resource "aws_cloudwatch_event_rule" "example" {
   name           = "${local.prefix}-github-events-all"
-  description    = "Caputure all GitHub events"
+  description    = "Capture all GitHub events"
   event_bus_name = local.event_bus_name
   event_pattern  = <<EOF
 {
@@ -322,7 +388,7 @@ resource "aws_iam_role" "event_rule_role" {
 
 data aws_iam_policy_document firehose_stream {
   statement {
-    INSER_YOUR_POIICY_HERE_TO_ACCESS_THE_TARGET
+    INSERT_YOUR_POLICY_HERE_TO_ACCESS_THE_TARGET
   }
 }
 
@@ -332,62 +398,3 @@ resource "aws_iam_role_policy" "event_rule_firehose_role" {
   policy = data.aws_iam_policy_document.firehose_stream.json
 }
 ```
-
-### Queue to publish workflow job events
-
-!!! warning "Removed
-
-    This feaTure will be removed since we introducing the EventBridge. Same functionality can be implemented by adding a rule to the EventBridge to forward `workflow_job` events to the SQS queue.
-
-Below an example how you can sent all `workflow_job` with action `in_progress` to a SQS queue.
-
-```hcl
-
-resource "aws_cloudwatch_event_rule" "workflow_job_in_progress" {
-  name           = "workflow-job-in-progress"
-  event_bus_name = modules.runners.webhook.eventbridge.name # The name of the event bus output by the module
-
-  event_pattern = <<EOF
-{
-  "detail-type": ["workflow_job"],
-  "detail": {
-    "action": ["in_progress"]
-  }
-}
-EOF
-}
-
-resource "aws_sqs_queue" "workflow_job_in_progress" {
-  name = "workflow_job_in_progress
-}
-
-resource "aws_sqs_queue_policy" "workflow_job_in_progress" {
-  queue_url = aws_sqs_queue.workflow_job_in_progress.id
-  policy    = data.aws_iam_policy_document.sqs_policy.json
-}
-
-data "aws_iam_policy_document" "sqs_policy" {
-  statement {
-    sid     = "AllowFromEventBridge"
-    actions = ["sqs:SendMessage"]
-
-    principals {
-      type        = "Service"
-      identifiers = ["events.amazonaws.com"]
-    }
-
-    resources = [aws_sqs_queue.workflow_job_in_progress.arn]
-
-    condition {
-      test     = "ArnEquals"
-      variable = "aws:SourceArn"
-      values   = [aws_cloudwatch_event_rule.workflow_job_in_progress.arn]
-    }
-  }
-}
-
-```
-
-
-
-NOTE: By default, a runner AMI update requires a re-apply of this terraform config (the runner AMI ID is looked up by a terraform data source). To avoid this, you can use `ami_id_ssm_parameter_name` to have the scale-up lambda dynamically lookup the runner AMI ID from an SSM parameter at instance launch time. Said SSM parameter is managed outside of this module (e.g. by a runner AMI build workflow).

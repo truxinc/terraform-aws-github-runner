@@ -1,8 +1,9 @@
 import { SendMessageCommand, SQSClient } from '@aws-sdk/client-sqs';
 import { mockClient } from 'aws-sdk-client-mock';
-import 'aws-sdk-client-mock-jest';
+import 'aws-sdk-client-mock-jest/vitest';
 import { publishMessage } from './sqs';
 import { logger } from '@aws-github-runner/aws-powertools-util';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const mockSQSClient = mockClient(SQSClient);
 
@@ -27,26 +28,9 @@ describe('Publish message to SQS', () => {
     });
   });
 
-  it('should publish message to SQS Fifo queue', async () => {
-    // setup
-    mockSQSClient.on(SendMessageCommand).resolves({
-      MessageId: '123',
-    });
-
-    // act
-    await publishMessage('test', 'https://sqs.eu-west-1.amazonaws.com/123456789/queued-builds.fifo');
-
-    // assert
-    expect(mockSQSClient).toHaveReceivedCommandWith(SendMessageCommand, {
-      QueueUrl: 'https://sqs.eu-west-1.amazonaws.com/123456789/queued-builds.fifo',
-      MessageBody: 'test',
-      MessageGroupId: '1', // Fifo queue
-    });
-  });
-
   it('should log error if queue URL not found', async () => {
     // setup
-    const logErrorSpy = jest.spyOn(logger, 'error');
+    const logErrorSpy = vi.spyOn(logger, 'error');
 
     // act
     await publishMessage('test', '');
@@ -59,7 +43,7 @@ describe('Publish message to SQS', () => {
   it('should log error if SQS send fails', async () => {
     // setup
     mockSQSClient.on(SendMessageCommand).rejects(new Error('failed'));
-    const logErrorSpy = jest.spyOn(logger, 'error');
+    const logErrorSpy = vi.spyOn(logger, 'error');
 
     // act
     await publishMessage('test', 'https://sqs.eu-west-1.amazonaws.com/123456789/queued-builds');

@@ -26,8 +26,8 @@ resource "aws_lambda_function" "webhook" {
         POWERTOOLS_TRACER_CAPTURE_ERROR          = var.config.tracing_config.capture_error
         PARAMETER_GITHUB_APP_WEBHOOK_SECRET      = var.config.github_app_parameters.webhook_secret.name
         REPOSITORY_ALLOW_LIST                    = jsonencode(var.config.repository_white_list)
-        PARAMETER_RUNNER_MATCHER_CONFIG_PATH     = var.config.ssm_parameter_runner_matcher_config.name
-        PARAMETER_RUNNER_MATCHER_VERSION         = var.config.ssm_parameter_runner_matcher_config.version # enforce cold start after Changes in SSM parameter
+        PARAMETER_RUNNER_MATCHER_CONFIG_PATH     = join(":", [for p in var.config.ssm_parameter_runner_matcher_config : p.name])
+        PARAMETER_RUNNER_MATCHER_VERSION         = join(":", [for p in var.config.ssm_parameter_runner_matcher_config : p.version]) # enforce cold start after Changes in SSM parameter
       } : k => v if v != null
     }
   }
@@ -90,7 +90,7 @@ data "aws_iam_policy_document" "lambda_assume_role_policy" {
 }
 
 resource "aws_iam_role" "webhook_lambda" {
-  name                 = "${var.config.prefix}-direct-webhook-lambda-role"
+  name                 = "${substr("${var.config.prefix}-direct-webhook-lambda", 0, 54)}-${substr(md5("${var.config.prefix}-direct-webhook-lambda"), 0, 8)}"
   assume_role_policy   = data.aws_iam_policy_document.lambda_assume_role_policy.json
   path                 = var.config.role_path
   permissions_boundary = var.config.role_permissions_boundary
@@ -134,7 +134,12 @@ resource "aws_iam_role_policy" "webhook_ssm" {
   role = aws_iam_role.webhook_lambda.name
 
   policy = templatefile("${path.module}/../policies/lambda-ssm.json", {
-    resource_arns = jsonencode([var.config.github_app_parameters.webhook_secret.arn, var.config.ssm_parameter_runner_matcher_config.arn])
+    resource_arns = jsonencode(
+      concat(
+        [var.config.github_app_parameters.webhook_secret.arn],
+        [for p in var.config.ssm_parameter_runner_matcher_config : p.arn]
+      )
+    )
   })
 }
 

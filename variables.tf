@@ -9,7 +9,7 @@ variable "vpc_id" {
 }
 
 variable "subnet_ids" {
-  description = "List of subnets in which the action runner instances will be launched. The subnets need to exist in the configured VPC (`vpc_id`), and must reside in different availability zones (see https://github.com/philips-labs/terraform-aws-github-runner/issues/2904)"
+  description = "List of subnets in which the action runner instances will be launched. The subnets need to exist in the configured VPC (`vpc_id`), and must reside in different availability zones (see https://github.com/github-aws-runners/terraform-aws-github-runner/issues/2904)"
   type        = list(string)
 }
 
@@ -32,12 +32,39 @@ variable "enable_organization_runners" {
 }
 
 variable "github_app" {
-  description = "GitHub app parameters, see your github app. Ensure the key is the base64-encoded `.pem` file (the output of `base64 app.private-key.pem`, not the content of `private-key.pem`)."
+  description = <<EOF
+  GitHub app parameters, see your github app.
+  You can optionally create the SSM parameters yourself and provide the ARN and name here, through the `*_ssm` attributes.
+  If you chose to provide the configuration values directly here,
+  please ensure the key is the base64-encoded `.pem` file (the output of `base64 app.private-key.pem`, not the content of `private-key.pem`).
+  Note: the provided SSM parameters arn and name have a precedence over the actual value (i.e `key_base64_ssm` has a precedence over `key_base64` etc).
+  EOF
   type = object({
-    key_base64     = string
-    id             = string
-    webhook_secret = string
+    key_base64 = optional(string)
+    key_base64_ssm = optional(object({
+      arn  = string
+      name = string
+    }))
+    id = optional(string)
+    id_ssm = optional(object({
+      arn  = string
+      name = string
+    }))
+    webhook_secret = optional(string)
+    webhook_secret_ssm = optional(object({
+      arn  = string
+      name = string
+    }))
   })
+  validation {
+    condition     = (var.github_app.key_base64 != null || var.github_app.key_base64_ssm != null) && (var.github_app.id != null || var.github_app.id_ssm != null) && (var.github_app.webhook_secret != null || var.github_app.webhook_secret_ssm != null)
+    error_message = <<EOF
+     You must set all of the following parameters, choosing one option from each pair:
+      - `key_base64` or `key_base64_ssm`
+      - `id` or `id_ssm`
+      - `webhook_secret` or `webhook_secret_ssm`
+    EOF
+  }
 }
 
 variable "scale_down_schedule_expression" {
@@ -165,6 +192,12 @@ variable "runner_binaries_s3_sse_configuration" {
   }
 }
 
+variable "runner_binaries_s3_tags" {
+  description = "Map of tags that will be added to the S3 bucket. Note these are additional tags to the default tags."
+  type        = map(string)
+  default     = {}
+}
+
 variable "runner_binaries_s3_versioning" {
   description = "Status of S3 versioning for runner-binaries S3 bucket. Once set to Enabled the change cannot be reverted via Terraform!"
   type        = string
@@ -250,6 +283,22 @@ variable "enable_runner_on_demand_failover_for_errors" {
   default     = []
 }
 
+variable "scale_errors" {
+  description = "List of aws error codes that should trigger retry during scale up. This list will replace the default errors defined in the variable `defaultScaleErrors` in https://github.com/github-aws-runners/terraform-aws-github-runner/blob/main/lambdas/functions/control-plane/src/aws/runners.ts"
+  type        = list(string)
+  default = [
+    "UnfulfillableCapacity",
+    "MaxSpotInstanceCountExceeded",
+    "TargetCapacityLimitExceededException",
+    "RequestLimitExceeded",
+    "ResourceLimitExceeded",
+    "MaxSpotInstanceCountExceeded",
+    "MaxSpotFleetRequestCountExceeded",
+    "InsufficientInstanceCapacity",
+    "InsufficientCapacityOnHost",
+  ]
+}
+
 variable "enable_userdata" {
   description = "Should the userdata script be enabled for the runner. Set this to false if you are using your own prebuilt AMI."
   type        = bool
@@ -263,7 +312,7 @@ variable "userdata_template" {
 }
 
 variable "userdata_content" {
-  description = "Alternative user-data content, replacing the templated one. By providing your own user_data you have to take care of installing all required software, including the action runner and registering the runner.  Be-aware configuration paramaters in SSM as well as tags are treated as internals. Changes will not trigger a breaking release."
+  description = "Alternative user-data content, replacing the templated one. By providing your own user_data you have to take care of installing all required software, including the action runner and registering the runner.  Be-aware configuration parameters in SSM as well as tags are treated as internals. Changes will not trigger a breaking release."
   type        = string
   default     = null
 }
@@ -278,6 +327,18 @@ variable "userdata_post_install" {
   type        = string
   default     = ""
   description = "Script to be ran after the GitHub Actions runner is installed on the EC2 instances"
+}
+
+variable "runner_hook_job_started" {
+  type        = string
+  default     = ""
+  description = "Script to be ran in the runner environment at the beginning of every job"
+}
+
+variable "runner_hook_job_completed" {
+  type        = string
+  default     = ""
+  description = "Script to be ran in the runner environment at the end of every job"
 }
 
 variable "idle_config" {
@@ -327,33 +388,25 @@ variable "block_device_mappings" {
   }]
 }
 
-variable "ami_filter" {
-  description = "Map of lists used to create the AMI filter for the action runner AMI."
-  type        = map(list(string))
-  default     = { state = ["available"] }
-  validation {
-    # check the availability of the AMI
-    condition     = contains(keys(var.ami_filter), "state")
-    error_message = "The \"ami_filter\" variable must contain the \"state\" key with the value \"available\"."
-  }
-}
+variable "ami" {
+  description = <<EOT
+AMI configuration for the action runner instances. This object allows you to specify all AMI-related settings in one place.
 
-variable "ami_owners" {
-  description = "The list of owners used to select the AMI of action runner instances."
-  type        = list(string)
-  default     = ["amazon"]
-}
+Parameters:
+- `filter`: Map of lists to filter AMIs by various criteria (e.g., { name = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-*"], state = ["available"] })
+- `owners`: List of AMI owners to limit the search. Common values: ["amazon"], ["self"], or specific AWS account IDs
+- `id_ssm_parameter_arn`: ARN of an SSM parameter containing the AMI ID. If specified, this overrides both AMI filter and parameter name
+- `kms_key_arn`: Optional KMS key ARN if the AMI is encrypted with a customer managed key
 
-variable "ami_id_ssm_parameter_name" {
-  description = "Externally managed SSM parameter (of data type aws:ec2:image) that contains the AMI ID to launch runner instances from. Overrides ami_filter"
-  type        = string
-  default     = null
-}
-
-variable "ami_kms_key_arn" {
-  description = "Optional CMK Key ARN to be used to launch an instance from a shared encrypted AMI"
-  type        = string
-  default     = null
+Defaults to null, in which case the module falls back to individual AMI variables (deprecated).
+EOT
+  type = object({
+    filter               = optional(map(list(string)), { state = ["available"] })
+    owners               = optional(list(string), ["amazon"])
+    id_ssm_parameter_arn = optional(string, null)
+    kms_key_arn          = optional(string, null)
+  })
+  default = null
 }
 
 variable "lambda_s3_bucket" {
@@ -443,7 +496,7 @@ variable "runner_log_files" {
 }
 
 variable "ghes_url" {
-  description = "GitHub Enterprise Server URL. Example: https://github.internal.co - DO NOT SET IF USING PUBLIC GITHUB"
+  description = "GitHub Enterprise Server URL. Example: https://github.internal.co - DO NOT SET IF USING PUBLIC GITHUB. However if you are using GitHub Enterprise Cloud with data-residency (ghe.com), set the endpoint here. Example - https://companyname.ghe.com "
   type        = string
   default     = null
 }
@@ -640,12 +693,6 @@ variable "lambda_principals" {
   default = []
 }
 
-variable "enable_fifo_build_queue" {
-  description = "Enable a FIFO queue to keep the order of events received by the webhook. Recommended for repo level runners."
-  type        = bool
-  default     = false
-}
-
 variable "redrive_build_queue" {
   description = "Set options to attach (optional) a dead letter queue to the build queue, the queue between the webhook and the scale up lambda. You have the following options. 1. Disable by setting `enabled` to false. 2. Enable by setting `enabled` to `true`, `maxReceiveCount` to a number of max retries."
   type = object({
@@ -721,7 +768,7 @@ variable "disable_runner_autoupdate" {
 variable "lambda_runtime" {
   description = "AWS Lambda runtime."
   type        = string
-  default     = "nodejs20.x"
+  default     = "nodejs24.x"
 }
 
 variable "lambda_architecture" {
@@ -752,7 +799,7 @@ variable "state_event_rule_binaries_syncer" {
 }
 
 variable "queue_encryption" {
-  description = "Configure how data on queues managed by the modules in ecrypted at REST. Options are encryped via SSE, non encrypted and via KMSS. By default encryptes via SSE is enabled. See for more details the Terraform `aws_sqs_queue` resource https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sqs_queue."
+  description = "Configure how data on queues managed by the modules is encrypted at REST. Options are encrypted via SSE, non encrypted and via KMS. By default encrypted via SSE is enabled. See for more details the Terraform `aws_sqs_queue` resource https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sqs_queue."
   type = object({
     kms_data_key_reuse_period_seconds = number
     kms_master_key_id                 = string
@@ -788,7 +835,7 @@ variable "ssm_paths" {
 }
 
 variable "runner_name_prefix" {
-  description = "The prefix used for the GitHub runner name. The prefix will be used in the default start script to prefix the instance name when register the runner in GitHub. The value is availabe via an EC2 tag 'ghr:runner_name_prefix'."
+  description = "The prefix used for the GitHub runner name. The prefix will be used in the default start script to prefix the instance name when register the runner in GitHub. The value is available via an EC2 tag 'ghr:runner_name_prefix'."
   type        = string
   default     = ""
   validation {
@@ -818,8 +865,33 @@ variable "runner_credit_specification" {
   }
 }
 
+variable "runner_cpu_options" {
+  description = "The CPU options for the instance. See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/launch_template#cpu-options for details. Note that not all instance types support CPU options, see https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instance-optimize-cpu.html#instance-cpu-options"
+  type = object({
+    core_count       = number
+    threads_per_core = number
+  })
+  default = null
+}
+
+variable "runner_placement" {
+  description = "The placement options for the instance. See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/launch_template#placement for details."
+  type = object({
+    affinity                = optional(string)
+    availability_zone       = optional(string)
+    group_id                = optional(string)
+    group_name              = optional(string)
+    host_id                 = optional(string)
+    host_resource_group_arn = optional(number)
+    spread_domain           = optional(string)
+    tenancy                 = optional(string)
+    partition_number        = optional(number)
+  })
+  default = null
+}
+
 variable "enable_jit_config" {
-  description = "Overwrite the default behavior for JIT configuration. By default JIT configuration is enabled for ephemeral runners and disabled for non-ephemeral runners. In case of GHES check first if the JIT config API is avaialbe. In case you upgradeing from 3.x to 4.x you can set `enable_jit_config` to `false` to avoid a breaking change when having your own AMI."
+  description = "Overwrite the default behavior for JIT configuration. By default JIT configuration is enabled for ephemeral runners and disabled for non-ephemeral runners. In case of GHES check first if the JIT config API is available. In case you are upgrading from 3.x to 4.x you can set `enable_jit_config` to `false` to avoid a breaking change when having your own AMI."
   type        = bool
   default     = null
 }
@@ -836,7 +908,7 @@ variable "runners_ssm_housekeeper" {
 
   `schedule_expression`: is used to configure the schedule for the lambda.
   `enabled`: enable or disable the lambda trigger via the EventBridge.
-  `lambda_memory_size`: lambda memery size limit.
+  `lambda_memory_size`: lambda memory size limit.
   `lambda_timeout`: timeout for the lambda in seconds.
   `config`: configuration for the lambda function. Token path will be read by default from the module.
   EOF
@@ -874,7 +946,7 @@ variable "instance_termination_watcher" {
 
     `enable`: Enable or disable the spot termination watcher.
     'features': Enable or disable features of the termination watcher.
-    `memory_size`: Memory size linit in MB of the lambda.
+    `memory_size`: Memory size limit in MB of the lambda.
     `s3_key`: S3 key for syncer lambda function. Required if using S3 bucket to specify lambdas.
     `s3_object_version`: S3 object version for syncer lambda function. Useful if S3 versioning is enabled on source bucket.
     `timeout`: Time out of the lambda in seconds.
@@ -882,8 +954,7 @@ variable "instance_termination_watcher" {
   EOF
 
   type = object({
-    enable        = optional(bool, false)
-    enable_metric = optional(string, null) # deprectaed
+    enable = optional(bool, false)
     features = optional(object({
       enable_spot_termination_handler              = optional(bool, true)
       enable_spot_termination_notification_watcher = optional(bool, true)
@@ -896,10 +967,6 @@ variable "instance_termination_watcher" {
   })
   default = {}
 
-  validation {
-    condition     = var.instance_termination_watcher.enable_metric == null
-    error_message = "The variable `instance_termination_watcher.enable_metric` is deprecated, use `metrics` instead."
-  }
 }
 
 variable "runners_ebs_optimized" {
@@ -916,7 +983,7 @@ variable "lambda_tags" {
 
 variable "job_retry" {
   description = <<-EOF
-    Experimental! Can be removed / changed without trigger a major release.Configure job retries. The configuration enables job retries (for ephemeral runners). After creating the insances a message will be published to a job retry queue. The job retry check lambda is checking after a delay if the job is queued. If not the message will be published again on the scale-up (build queue). Using this feature can impact the reate limit of the GitHub app.
+    Experimental! Can be removed / changed without trigger a major release.Configure job retries. The configuration enables job retries (for ephemeral runners). After creating the instances a message will be published to a job retry queue. The job retry check lambda is checking after a delay if the job is queued. If not the message will be published again on the scale-up (build queue). Using this feature can impact the rate limit of the GitHub app.
 
     `enable`: Enable or disable the job retry feature.
     `delay_in_seconds`: The delay in seconds before the job retry check lambda will check the job status.
@@ -945,9 +1012,31 @@ variable "eventbridge" {
     `accept_events`: List can be used to only allow specific events to be putted on the EventBridge. By default all events, empty list will be be interpreted as all events.
 EOF
   type = object({
-    enable        = optional(bool, false)
+    enable        = optional(bool, true)
     accept_events = optional(list(string), null)
   })
 
   default = {}
+}
+
+variable "user_agent" {
+  description = "User agent used for API calls by lambda functions."
+  type        = string
+  default     = "github-aws-runners"
+}
+
+variable "lambda_event_source_mapping_batch_size" {
+  description = "Maximum number of records to pass to the lambda function in a single batch for the event source mapping. When not set, the AWS default of 10 events will be used."
+  type        = number
+  default     = 10
+}
+
+variable "lambda_event_source_mapping_maximum_batching_window_in_seconds" {
+  description = "Maximum amount of time to gather records before invoking the lambda function, in seconds. AWS requires this to be greater than 0 if batch_size is greater than 10. Defaults to 0."
+  type        = number
+  default     = 0
+  validation {
+    condition     = var.lambda_event_source_mapping_maximum_batching_window_in_seconds >= 0 && var.lambda_event_source_mapping_maximum_batching_window_in_seconds <= 300
+    error_message = "Maximum batching window must be between 0 and 300 seconds."
+  }
 }

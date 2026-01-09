@@ -42,7 +42,7 @@ module "runners" {
   #   iops                  = null
   # }]
 
-  # When not explicitly set lambda zip files are grapped from the module requiring lambda build.
+  # When not explicitly set lambda zip files are grabbed from the module requiring lambda build.
   # Alternatively you can set the path to the lambda zip files here.
   #
   # For example grab zip files via lambda_download
@@ -68,7 +68,7 @@ module "runners" {
   # enable S3 versioning for runners S3 bucket
   # runner_binaries_s3_versioning = "Enabled"
 
-  # Uncommet idle config to have idle runners from 9 to 5 in time zone Amsterdam
+  # Uncomment idle config to have idle runners from 9 to 5 in time zone Amsterdam
   # idle_config = [{
   #   cron      = "* * 9-17 * * *"
   #   timeZone  = "Europe/Amsterdam"
@@ -84,9 +84,6 @@ module "runners" {
   delay_webhook_event   = 5
   runners_maximum_count = 2
 
-  # set up a fifo queue to remain order
-  enable_fifo_build_queue = true
-
   # override scaling down
   scale_down_schedule_expression = "cron(* * * * ? *)"
 
@@ -95,12 +92,10 @@ module "runners" {
   # prefix GitHub runners with the environment name
   runner_name_prefix = "${local.environment}_"
 
-  # webhook supports two modes, either direct or via the eventbridge, uncomment to enable eventbridge
-  # eventbridge = {
-  #   enable = true
-  #   # adjust the allow events to only allow specific events, like workflow_job
-  #   # allowed_events = ['workflow_job']
-  # }
+  # by default eventbridge is used, see multi-runner example. Here we disable the eventbridge
+  eventbridge = {
+    enable = false
+  }
 
   # Enable debug logging for the lambda functions
   # log_level = "debug"
@@ -146,6 +141,7 @@ module "runners" {
 
   # enable CMK instead of aws managed key for encryptions
   # kms_key_arn = aws_kms_key.github.arn
+
 }
 
 module "webhook_github_app" {

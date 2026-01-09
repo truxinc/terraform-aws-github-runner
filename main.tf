@@ -4,8 +4,9 @@ locals {
   })
 
   github_app_parameters = {
-    id         = module.ssm.parameters.github_app_id
-    key_base64 = module.ssm.parameters.github_app_key_base64
+    id             = coalesce(var.github_app.id_ssm, module.ssm.parameters.github_app_id)
+    key_base64     = coalesce(var.github_app.key_base64_ssm, module.ssm.parameters.github_app_key_base64)
+    webhook_secret = coalesce(var.github_app.webhook_secret_ssm, module.ssm.parameters.github_app_webhook_secret)
   }
 
   default_runner_labels = distinct(concat(["self-hosted", var.runner_os, var.runner_architecture]))
@@ -20,9 +21,9 @@ resource "random_string" "random" {
   upper   = false
 }
 
-data "aws_iam_policy_document" "deny_unsecure_transport" {
+data "aws_iam_policy_document" "deny_insecure_transport" {
   statement {
-    sid = "DenyUnsecureTransport"
+    sid = "DenyInsecureTransport"
 
     effect = "Deny"
 
@@ -49,17 +50,15 @@ data "aws_iam_policy_document" "deny_unsecure_transport" {
 
 resource "aws_sqs_queue_policy" "build_queue_policy" {
   queue_url = aws_sqs_queue.queued_builds.id
-  policy    = data.aws_iam_policy_document.deny_unsecure_transport.json
+  policy    = data.aws_iam_policy_document.deny_insecure_transport.json
 }
 
 resource "aws_sqs_queue" "queued_builds" {
-  name                        = "${var.prefix}-queued-builds${var.enable_fifo_build_queue ? ".fifo" : ""}"
-  delay_seconds               = var.delay_webhook_event
-  visibility_timeout_seconds  = var.runners_scale_up_lambda_timeout
-  message_retention_seconds   = var.job_queue_retention_in_seconds
-  fifo_queue                  = var.enable_fifo_build_queue
-  receive_wait_time_seconds   = 0
-  content_based_deduplication = var.enable_fifo_build_queue
+  name                       = "${var.prefix}-queued-builds"
+  delay_seconds              = var.delay_webhook_event
+  visibility_timeout_seconds = var.runners_scale_up_lambda_timeout
+  message_retention_seconds  = var.job_queue_retention_in_seconds
+  receive_wait_time_seconds  = 0
   redrive_policy = var.redrive_build_queue.enabled ? jsonencode({
     deadLetterTargetArn = aws_sqs_queue.queued_builds_dlq[0].arn,
     maxReceiveCount     = var.redrive_build_queue.maxReceiveCount
@@ -75,23 +74,21 @@ resource "aws_sqs_queue" "queued_builds" {
 resource "aws_sqs_queue_policy" "build_queue_dlq_policy" {
   count     = var.redrive_build_queue.enabled ? 1 : 0
   queue_url = aws_sqs_queue.queued_builds.id
-  policy    = data.aws_iam_policy_document.deny_unsecure_transport.json
+  policy    = data.aws_iam_policy_document.deny_insecure_transport.json
 }
 
 resource "aws_sqs_queue" "queued_builds_dlq" {
   count = var.redrive_build_queue.enabled ? 1 : 0
-  name  = "${var.prefix}-queued-builds_dead_letter${var.enable_fifo_build_queue ? ".fifo" : ""}"
+  name  = "${var.prefix}-queued-builds_dead_letter"
 
   sqs_managed_sse_enabled           = var.queue_encryption.sqs_managed_sse_enabled
   kms_master_key_id                 = var.queue_encryption.kms_master_key_id
   kms_data_key_reuse_period_seconds = var.queue_encryption.kms_data_key_reuse_period_seconds
-  fifo_queue                        = var.enable_fifo_build_queue
   tags                              = var.tags
 }
 
 module "ssm" {
-  source = "./modules/ssm"
-
+  source      = "./modules/ssm"
   kms_key_arn = var.kms_key_arn
   path_prefix = "${local.ssm_root_path}/${var.ssm_paths.app}"
   github_app  = var.github_app
@@ -111,10 +108,9 @@ module "webhook" {
   eventbridge = var.eventbridge
 
   runner_matcher_config = {
-    (aws_sqs_queue.queued_builds.id) = {
+    "${var.prefix}-queued-builds" = {
       id : aws_sqs_queue.queued_builds.id
       arn : aws_sqs_queue.queued_builds.arn
-      fifo : var.enable_fifo_build_queue
       matcherConfig : {
         labelMatchers : [local.runner_labels]
         exactMatch : var.enable_runner_workflow_job_labels_check_all
@@ -124,7 +120,7 @@ module "webhook" {
   matcher_config_parameter_store_tier = var.matcher_config_parameter_store_tier
 
   github_app_parameters = {
-    webhook_secret = module.ssm.parameters.github_app_webhook_secret
+    webhook_secret = local.github_app_parameters.webhook_secret
   }
 
   lambda_s3_bucket                              = var.lambda_s3_bucket
@@ -181,11 +177,8 @@ module "runners" {
   instance_max_spot_price       = var.instance_max_spot_price
   block_device_mappings         = var.block_device_mappings
 
-  runner_architecture       = var.runner_architecture
-  ami_filter                = var.ami_filter
-  ami_owners                = var.ami_owners
-  ami_id_ssm_parameter_name = var.ami_id_ssm_parameter_name
-  ami_kms_key_arn           = var.ami_kms_key_arn
+  runner_architecture = var.runner_architecture
+  ami                 = var.ami
 
   sqs_build_queue                      = aws_sqs_queue.queued_builds
   github_app_parameters                = local.github_app_parameters
@@ -194,6 +187,7 @@ module "runners" {
   enable_jit_config                    = var.enable_jit_config
   enable_job_queued_check              = var.enable_job_queued_check
   enable_on_demand_failover_for_errors = var.enable_runner_on_demand_failover_for_errors
+  scale_errors                         = var.scale_errors
   disable_runner_autoupdate            = var.disable_runner_autoupdate
   enable_managed_runner_security_group = var.enable_managed_runner_security_group
   enable_runner_detailed_monitoring    = var.enable_runner_detailed_monitoring
@@ -211,29 +205,33 @@ module "runners" {
   runner_additional_security_group_ids = var.runner_additional_security_group_ids
   metadata_options                     = var.runner_metadata_options
   credit_specification                 = var.runner_credit_specification
+  cpu_options                          = var.runner_cpu_options
+  placement                            = var.runner_placement
 
-  enable_runner_binaries_syncer    = var.enable_runner_binaries_syncer
-  lambda_s3_bucket                 = var.lambda_s3_bucket
-  runners_lambda_s3_key            = var.runners_lambda_s3_key
-  runners_lambda_s3_object_version = var.runners_lambda_s3_object_version
-  lambda_runtime                   = var.lambda_runtime
-  lambda_architecture              = var.lambda_architecture
-  lambda_zip                       = var.runners_lambda_zip
-  lambda_scale_up_memory_size      = coalesce(var.runners_scale_up_Lambda_memory_size, var.runners_scale_up_lambda_memory_size)
-  lambda_scale_down_memory_size    = var.runners_scale_down_lambda_memory_size
-  lambda_timeout_scale_up          = var.runners_scale_up_lambda_timeout
-  lambda_timeout_scale_down        = var.runners_scale_down_lambda_timeout
-  lambda_subnet_ids                = var.lambda_subnet_ids
-  lambda_security_group_ids        = var.lambda_security_group_ids
-  lambda_tags                      = var.lambda_tags
-  tracing_config                   = var.tracing_config
-  logging_retention_in_days        = var.logging_retention_in_days
-  logging_kms_key_id               = var.logging_kms_key_id
-  enable_cloudwatch_agent          = var.enable_cloudwatch_agent
-  cloudwatch_config                = var.cloudwatch_config
-  runner_log_files                 = var.runner_log_files
-  runner_group_name                = var.runner_group_name
-  runner_name_prefix               = var.runner_name_prefix
+  enable_runner_binaries_syncer                                  = var.enable_runner_binaries_syncer
+  lambda_s3_bucket                                               = var.lambda_s3_bucket
+  runners_lambda_s3_key                                          = var.runners_lambda_s3_key
+  runners_lambda_s3_object_version                               = var.runners_lambda_s3_object_version
+  lambda_runtime                                                 = var.lambda_runtime
+  lambda_architecture                                            = var.lambda_architecture
+  lambda_event_source_mapping_batch_size                         = var.lambda_event_source_mapping_batch_size
+  lambda_event_source_mapping_maximum_batching_window_in_seconds = var.lambda_event_source_mapping_maximum_batching_window_in_seconds
+  lambda_zip                                                     = var.runners_lambda_zip
+  lambda_scale_up_memory_size                                    = var.runners_scale_up_lambda_memory_size
+  lambda_scale_down_memory_size                                  = var.runners_scale_down_lambda_memory_size
+  lambda_timeout_scale_up                                        = var.runners_scale_up_lambda_timeout
+  lambda_timeout_scale_down                                      = var.runners_scale_down_lambda_timeout
+  lambda_subnet_ids                                              = var.lambda_subnet_ids
+  lambda_security_group_ids                                      = var.lambda_security_group_ids
+  lambda_tags                                                    = var.lambda_tags
+  tracing_config                                                 = var.tracing_config
+  logging_retention_in_days                                      = var.logging_retention_in_days
+  logging_kms_key_id                                             = var.logging_kms_key_id
+  enable_cloudwatch_agent                                        = var.enable_cloudwatch_agent
+  cloudwatch_config                                              = var.cloudwatch_config
+  runner_log_files                                               = var.runner_log_files
+  runner_group_name                                              = var.runner_group_name
+  runner_name_prefix                                             = var.runner_name_prefix
 
   scale_up_reserved_concurrent_executions = var.scale_up_reserved_concurrent_executions
 
@@ -249,6 +247,8 @@ module "runners" {
   userdata_content               = var.userdata_content
   userdata_pre_install           = var.userdata_pre_install
   userdata_post_install          = var.userdata_post_install
+  runner_hook_job_started        = var.runner_hook_job_started
+  runner_hook_job_completed      = var.runner_hook_job_completed
   key_name                       = var.key_name
   runner_ec2_tags                = var.runner_ec2_tags
 
@@ -258,6 +258,7 @@ module "runners" {
 
   ghes_url        = var.ghes_url
   ghes_ssl_verify = var.ghes_ssl_verify
+  user_agent      = var.user_agent
 
   kms_key_arn = var.kms_key_arn
 
@@ -307,6 +308,7 @@ module "runner_binaries" {
 
   state_event_rule_binaries_syncer     = var.state_event_rule_binaries_syncer
   server_side_encryption_configuration = var.runner_binaries_s3_sse_configuration
+  s3_tags                              = var.runner_binaries_s3_tags
   s3_versioning                        = var.runner_binaries_s3_versioning
 
   role_path                 = var.role_path

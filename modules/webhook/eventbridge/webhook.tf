@@ -31,7 +31,7 @@ resource "aws_lambda_function" "webhook" {
         ACCEPT_EVENTS                        = jsonencode(var.config.accept_events)
         EVENT_BUS_NAME                       = aws_cloudwatch_event_bus.main.name
         PARAMETER_GITHUB_APP_WEBHOOK_SECRET  = var.config.github_app_parameters.webhook_secret.name
-        PARAMETER_RUNNER_MATCHER_CONFIG_PATH = var.config.ssm_parameter_runner_matcher_config.name
+        PARAMETER_RUNNER_MATCHER_CONFIG_PATH = join(":", [for p in var.config.ssm_parameter_runner_matcher_config : p.name])
       } : k => v if v != null
     }
   }
@@ -89,7 +89,7 @@ data "aws_iam_policy_document" "lambda_assume_role_policy" {
 }
 
 resource "aws_iam_role" "webhook_lambda" {
-  name                 = "${var.config.prefix}-eventbridge-webhook-lambda-role"
+  name                 = "${substr("${var.config.prefix}-eventbridge-webhook-lambda", 0, 54)}-${substr(md5("${var.config.prefix}-eventbridge-webhook-lambda"), 0, 8)}"
   assume_role_policy   = data.aws_iam_policy_document.lambda_assume_role_policy.json
   path                 = var.config.role_path
   permissions_boundary = var.config.role_permissions_boundary

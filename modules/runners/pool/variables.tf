@@ -32,6 +32,7 @@ variable "config" {
       ephemeral                            = bool
       enable_jit_config                    = bool
       enable_on_demand_failover_for_errors = list(string)
+      scale_errors                         = list(string)
       boot_time_in_minutes                 = number
       labels                               = list(string)
       launch_template = object({
@@ -57,6 +58,7 @@ variable "config" {
     role_permissions_boundary            = string
     kms_key_arn                          = string
     ami_kms_key_arn                      = string
+    ami_id_ssm_parameter_arn             = string
     role_path                            = string
     ssm_token_path                       = string
     ssm_config_path                      = string
@@ -64,6 +66,7 @@ variable "config" {
     ami_id_ssm_parameter_read_policy_arn = string
     arn_ssm_parameters_path_config       = string
     lambda_tags                          = map(string)
+    user_agent                           = string
   })
 }
 
