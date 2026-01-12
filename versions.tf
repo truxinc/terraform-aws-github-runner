@@ -11,4 +11,13 @@ terraform {
       version = "~> 3.0"
     }
   }
+  backend "s3" {
+    bucket = "trux-devops"
+    key    = "GitHub_Actions/ghaRunnerStatefile/terraform.tfstate"
+    region = "us-east-2"
+  }
+}
+# Added AWS provider
+provider "aws" {
+  region  = "us-east-1"
 }
